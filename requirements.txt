@@ -1,0 +1,20 @@
+# Reddit data collection
+praw==7.7.1
+python-dotenv==1.0.1
+
+# Data handling
+pandas==2.2.2
+numpy==1.26.4
+
+# NLP preprocessing
+nltk==3.8.1
+
+# Topic modeling
+gensim==4.3.2
+
+# Visualization
+pyLDAvis==3.4.1
+matplotlib==3.8.4
+
+# Utilities
+tqdm==4.66.4
