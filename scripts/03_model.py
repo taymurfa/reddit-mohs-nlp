@@ -23,12 +23,12 @@ import logging
 import warnings
 
 import pandas as pd
-import gensim
 import gensim.corpora as corpora
 from gensim.models import LdaModel
 from gensim.models.coherencemodel import CoherenceModel
 import pyLDAvis
 import pyLDAvis.gensim_models as gensimvis
+from topic_graph import generate_topic_graph
 
 # Suppress noisy deprecation warnings from pyLDAvis / gensim internals
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -239,7 +239,12 @@ def main():
     # ── Step 8: Generate interactive HTML visualization ───────────────────────
     generate_visualization(best_model, corpus, dictionary)
 
-    log.info("\nAll done! Open outputs/figures/lda_vis.html in a browser to explore topics.")
+    # ── Step 9: Generate Obsidian-style topic graph ────────────────────────────
+    generate_topic_graph(best_model, corpus, dictionary, best_k)
+
+    log.info("\nAll done!")
+    log.info("  pyLDAvis  → outputs/figures/lda_vis.html")
+    log.info("  Topic graph → outputs/figures/topic_graph.html")
 
 
 if __name__ == "__main__":
