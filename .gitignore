@@ -1,24 +1,9 @@
-# Credentials — never commit these
 .env
-
-# Raw and processed data — can be large and contain PII
-data/raw/
-data/processed/
-
-# Python cache
 __pycache__/
-*.py[cod]
-*.pyo
-.pytest_cache/
-
-# Virtual environments
+dist/
+dist-python/
+node_modules/
 venv/
-.venv/
-env/
-
-# OS junk
+*.pyc
 .DS_Store
-Thumbs.db
-
-# Jupyter (if used for exploration)
-.ipynb_checkpoints/
+.VSCode/
