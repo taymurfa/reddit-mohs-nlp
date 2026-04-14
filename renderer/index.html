@@ -222,8 +222,60 @@
             position: relative;
             background: var(--bg-dark);
             cursor: grab;
+            overflow: hidden;
         }
         #graph-container:active { cursor: grabbing; }
+
+        #topic-detail-card {
+            position: absolute;
+            bottom: 24px;
+            left: 24px;
+            width: 320px;
+            background: rgba(30, 31, 41, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            transform: translateY(120%);
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 50;
+            pointer-events: none;
+        }
+        
+        #topic-detail-card.visible { transform: translateY(0); pointer-events: auto; }
+
+        #td-header { font-size: 15px; font-weight: 600; color: white; margin-bottom: 8px; }
+        #td-body { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+        #td-loading { display: none; align-items: center; gap: 8px; font-size: 12px; color: var(--blue); margin-top: 12px; font-weight: 500;}
+
+        /* --- CITATIONS --- */
+        #td-citations {
+            margin-top: 16px;
+            font-size: 11px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .citation-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 8px;
+            border-radius: 6px;
+            border-left: 2px solid var(--blue);
+            color: var(--text-muted);
+        }
+        .citation-item a {
+            color: var(--blue);
+            text-decoration: none;
+            font-weight: 600;
+            display: block;
+            margin-bottom: 4px;
+        }
+        .citation-item a:hover { text-decoration: underline; }
 
         /* --- TABLE (Right) --- */
         #table-container {
@@ -308,8 +360,15 @@
 
             <div class="form-group">
                 <label>Number of Topics (k)</label>
-                <div class="input-wrapper">
-                    <input type="number" id="in-k" value="10" min="5" max="25">
+                <div class="row" style="align-items: center; gap: 10px;">
+                    <div class="input-wrapper" style="flex: 1;">
+                        <input type="number" id="in-k" value="10" min="5" max="25">
+                    </div>
+                    <div>
+                        <label style="display: flex; align-items: center; gap: 5px; margin: 0; cursor: pointer;">
+                            <input type="checkbox" id="in-k-auto" style="width: auto;"> Auto Optimize
+                        </label>
+                    </div>
                 </div>
             </div>
 
@@ -351,12 +410,23 @@
                 <div class="badge">Coherence <span id="tb-coherence"></span></div>
             </div>
             <div class="toolbar-actions">
+                <button id="btn-webllm" class="secondary">✨ Auto-Label via WebGPU</button>
                 <button id="btn-new" class="secondary">New Analysis</button>
                 <button id="btn-export" class="secondary">Export Topics</button>
             </div>
         </div>
         <div class="workspace">
-            <div id="graph-container"></div>
+            <div id="graph-container">
+                <div id="topic-detail-card">
+                    <div id="td-header">Topic Summary</div>
+                    <div id="td-body">Click a topic to generate a deeper summary using the context of its keywords.</div>
+                    <div id="td-loading">
+                        <div class="dot" style="width: 8px; height: 8px; background: var(--blue);"></div>
+                        <span id="td-loading-text">Generating insight...</span>
+                    </div>
+                    <div id="td-citations"></div>
+                </div>
+            </div>
             <div id="table-container">
                 <table>
                     <thead>
@@ -388,6 +458,8 @@
         let selectedTopicId = null;
         let loadingInterval = null;
         let d3Simulation = null;
+        let d3Svg = null;
+        let d3Zoom = null;
 
         const overlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
@@ -406,7 +478,8 @@
         // Execution
         document.getElementById('btn-run').addEventListener('click', async () => {
             const subreddit = document.getElementById('in-subreddit').value.trim();
-            const k = document.getElementById('in-k').value;
+            const isAuto = document.getElementById('in-k-auto').checked;
+            const k = isAuto ? "auto" : document.getElementById('in-k').value;
             const dFrom = document.getElementById('in-date-from').value;
             const dTo = document.getElementById('in-date-to').value;
 
@@ -453,6 +526,17 @@
             document.getElementById('results-view').classList.remove('active');
             document.getElementById('input-view').classList.add('active');
             if(d3Simulation) d3Simulation.stop();
+        });
+
+        document.getElementById('btn-webllm').addEventListener('click', () => {
+            if(window.runWebLLMOptimization && ldaData) {
+                window.runWebLLMOptimization(ldaData, () => {
+                    renderTable();
+                    renderGraph();
+                });
+            } else {
+                alert("WebLLM module is still loading, please wait.");
+            }
         });
 
         document.getElementById('btn-export').addEventListener('click', async () => {
@@ -530,6 +614,30 @@
             if (id !== null) {
                 const row = document.querySelector(`tr[data-topic-id="${id}"]`);
                 if (row) row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                
+                // Zoom graph to node
+                if(d3Svg && d3Zoom && d3Simulation) {
+                    const node = d3Simulation.nodes().find(n => n.id === id);
+                    if(node) {
+                        const container = document.getElementById('graph-container');
+                        const width = container.clientWidth;
+                        const height = container.clientHeight;
+                        d3Svg.transition().duration(750)
+                            .call(d3Zoom.transform, d3.zoomIdentity.translate(width/2, height/2).scale(2.2).translate(-node.x, -node.y));
+                    }
+                }
+                
+                // Trigger WebLLM Detail Card Generation
+                const tData = ldaData.topics.find(t => t.id === id);
+                if(tData && window.generateDetailedSummary) {
+                    window.generateDetailedSummary(tData, ldaData.subreddit);
+                }
+            } else {
+                // Reset zoom
+                if(d3Svg && d3Zoom) {
+                    d3Svg.transition().duration(750).call(d3Zoom.transform, d3.zoomIdentity);
+                }
+                document.getElementById('topic-detail-card')?.classList.remove('visible');
             }
 
             // Sync Graph Styling
@@ -543,7 +651,8 @@
 
         function renderGraph() {
             const container = document.getElementById('graph-container');
-            container.innerHTML = '';
+            // Remove existing svg but keep the topic detail overlay intact!
+            d3.select(container).selectAll("svg").remove();
             
             const width = container.clientWidth;
             const height = container.clientHeight;
@@ -558,15 +667,19 @@
                 color: (i % 2 === 0) ? "var(--blue)" : "var(--purple)"
             }));
 
-            const svg = d3.select(container).append("svg")
+            d3Zoom = d3.zoom()
+                .scaleExtent([0.5, 5])
+                .on("zoom", (e) => g.attr("transform", e.transform));
+
+            d3Svg = d3.select(container).append("svg")
                 .attr("width", "100%")
                 .attr("height", "100%")
-                .call(d3.zoom().on("zoom", (e) => g.attr("transform", e.transform)))
+                .call(d3Zoom)
                 .on("click", (e) => {
                     if(e.target.tagName === 'svg') selectTopic(null); // Clicked in void
                 });
 
-            const g = svg.append("g");
+            const g = d3Svg.append("g");
 
             // Register links
             const link = g.append("g")
@@ -648,6 +761,120 @@
                 renderGraph();
             }
         });
+    </script>
+    <script type="module">
+        import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+        
+        let globalEngine = null;
+        
+        window.getWebLLMEngine = async (progressCb) => {
+            if(!globalEngine) {
+                globalEngine = new webllm.MLCEngine();
+                globalEngine.setInitProgressCallback(progressCb);
+                await globalEngine.reload("Llama-3.2-1B-Instruct-q4f32_1-MLC");
+            }
+            return globalEngine;
+        };
+
+        window.generateDetailedSummary = async (topicData, subreddit) => {
+            const card = document.getElementById('topic-detail-card');
+            const body = document.getElementById('td-body');
+            const header = document.getElementById('td-header');
+            const loading = document.getElementById('td-loading');
+            const loadingText = document.getElementById('td-loading-text');
+            const citationsContainer = document.getElementById('td-citations');
+            
+            card.classList.add('visible');
+            header.innerText = topicData.label || "Generating...";
+            body.innerText = "";
+            loading.style.display = 'flex';
+            loadingText.innerText = "Generating insight...";
+            citationsContainer.innerHTML = "";
+            
+            // Render Citations UI
+            if (topicData.citations && topicData.citations.length > 0) {
+                const title = document.createElement("div");
+                title.style.color = "white";
+                title.style.fontWeight = "600";
+                title.style.marginBottom = "4px";
+                title.innerText = "Relevant Comments:";
+                citationsContainer.appendChild(title);
+                
+                topicData.citations.forEach((cit, idx) => {
+                    const block = document.createElement("div");
+                    block.className = "citation-item";
+                    block.innerHTML = `<a href="${cit.url}" target="_blank">Source ${idx + 1} ↗</a><div>"${cit.text}"</div>`;
+                    citationsContainer.appendChild(block);
+                });
+            }
+            
+            try {
+                const engine = await window.getWebLLMEngine((progress) => {
+                    const pct = Math.round(progress.progress * 100);
+                    if(pct < 100) loadingText.innerText = `Loading Engine... ${pct}%`;
+                    else loadingText.innerText = "Generating insight...";
+                });
+                
+                const keyword_list = topicData.words.map(w => w[0]).join(', ');
+                const prompt = `You are an expert community data analyst analyzing Reddit's r/${subreddit}. Provide a comprehensive but extremely concise 2-3 sentence paragraph summarizing what an overarching conversational topic containing these keywords is likely dealing with: ${keyword_list}. Explain the connection between the terms. Do not use conversational filler, just provide the summary paragraph directly.`;
+                
+                loadingText.innerText = "Generating insight...";
+                
+                const asyncChunkGenerator = await engine.chat.completions.create({
+                    messages: [{role: "user", content: prompt}],
+                    temperature: 0.3,
+                    stream: true
+                });
+                
+                loading.style.display = 'none'; // hide loader once streaming starts
+                
+                for await (const chunk of asyncChunkGenerator) {
+                    body.innerHTML += (chunk.choices[0]?.delta?.content || "").replace(/\n/g, '<br>');
+                }
+                
+            } catch(e) {
+                 body.innerText = "Failed to generate summary: " + e.message;
+                 loading.style.display = 'none';
+            }
+        };
+
+        window.runWebLLMOptimization = async (data, renderCallback) => {
+            const overlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            
+            overlay.style.display = 'flex';
+            
+            try {
+                const engine = await window.getWebLLMEngine((progress) => {
+                    loadingText.innerText = "Downloading Model Engine... " + Math.round(progress.progress * 100) + "%";
+                });
+                
+                loadingText.innerText = "Generating summaries via WebGPU...";
+                
+                for(let i = 0; i < data.topics.length; i++) {
+                    const t = data.topics[i];
+                    const keyword_list = t.words.map(w => w[0]).join(', ');
+                    const prompt = `Given these frequently occurring keywords from a Reddit topic in r/${data.subreddit}: ${keyword_list}\nProvide a short, concise 2-3 word label that summarizes what this topic is about. Return ONLY the label without punctuation or quotes, no explanation.`;
+                    
+                    const response = await engine.chat.completions.create({
+                        messages: [{role: "user", content: prompt}],
+                        temperature: 0.3
+                    });
+                    
+                    let res = response.choices[0].message.content.trim();
+                    res = res.replace(/"/g, '').replace(/'/g, '');
+                    if(res.length > 0 && res.length < 30) {
+                        t.label = res;
+                        renderCallback();
+                    }
+                }
+            } catch(e) {
+                console.error("WebLLM failed:", e);
+                alert("WebGPU Acceleration Failed: " + e.message);
+            } finally {
+                overlay.style.display = 'none';
+            }
+        };
     </script>
 </body>
 </html>

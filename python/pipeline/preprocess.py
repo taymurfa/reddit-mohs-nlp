@@ -39,8 +39,19 @@ def preprocess_data(texts: list) -> list:
     lemmatizer = WordNetLemmatizer()
     
     processed = []
-    for t in texts:
+    for doc in texts:
+        if isinstance(doc, dict):
+            t = doc.get("text", "")
+            url = doc.get("url", "")
+        else:
+            t = doc
+            url = ""
+            
         toks = clean_text(t, stop_words, lemmatizer)
         if len(toks) >= 5:
-            processed.append(toks)
+            processed.append({
+                "tokens": toks,
+                "url": url,
+                "original_text": t
+            })
     return processed

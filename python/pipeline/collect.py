@@ -27,13 +27,15 @@ def _fetch_comments(subreddit_name, post_id):
 
 
 def _walk_comments(children, out):
-    """Recursively walk the comment tree, collecting body text."""
+    """Recursively walk the comment tree, collecting body text and permalinks."""
     for child in children:
         if child.get("kind") == "more":
             continue
         body = child.get("data", {}).get("body", "")
+        permalink = child.get("data", {}).get("permalink", "")
+        url = f"https://www.reddit.com{permalink}" if permalink else ""
         if body and body not in ("[deleted]", "[removed]"):
-            out.append(body)
+            out.append({"text": body, "url": url})
         replies = child.get("data", {}).get("replies", "")
         if isinstance(replies, dict):
             _walk_comments(replies["data"]["children"], out)
@@ -85,7 +87,9 @@ def collect_data(subreddit_name, date_from_str, date_to_str):
 
             if created <= ts_to:
                 body = f"{post.get('title', '')} {post.get('selftext', '')}".strip()
-                posts_in_range.append((body, post["id"]))
+                permalink = post.get('permalink', '')
+                url = f"https://www.reddit.com{permalink}" if permalink else ""
+                posts_in_range.append(({"text": body, "url": url}, post["id"]))
 
         if done:
             break
@@ -97,7 +101,7 @@ def collect_data(subreddit_name, date_from_str, date_to_str):
         time.sleep(REQUEST_DELAY)
 
     # --- Phase 2: fetch comments for all posts in parallel ---
-    collected_texts = [body for body, _ in posts_in_range]
+    collected_texts = [data_obj for data_obj, _ in posts_in_range]
     post_ids = [pid for _, pid in posts_in_range]
 
     def fetch_with_delay(post_id):

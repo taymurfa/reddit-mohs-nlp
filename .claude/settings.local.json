@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python.exe -c \"import requests; print\\('requests OK'\\)\")",
+      "Bash(venv/Scripts/python.exe -c ':*)",
+      "Bash(npm run:*)",
+      "Bash(venv/Scripts/python.exe -m pip install pillow -q)"
+    ]
+  }
+}

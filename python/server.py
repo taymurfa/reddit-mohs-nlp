@@ -49,12 +49,33 @@ def run_pipeline():
             return jsonify({"error": "Not enough valid text data remaining after preprocessing."}), 400
             
         # Step 3: Train LDA
-        model_results = run_lda(tokens_list, int(k))
+        if k == "auto":
+            best_coherence = -1
+            best_results = None
+            best_k = 10
+            for candidate_k in [5, 8, 12, 16]:
+                try:
+                    res = run_lda(tokens_list, int(candidate_k), subreddit)
+                    if res["coherence"] > best_coherence:
+                        best_coherence = res["coherence"]
+                        best_results = res
+                        best_k = candidate_k
+                except Exception as e:
+                    print(f"Error testing k={candidate_k}: {e}")
+            
+            if not best_results:
+                return jsonify({"error": "Failed to auto-optimize topics."}), 500
+                
+            model_results = best_results
+            k = best_k
+        else:
+            k = int(k)
+            model_results = run_lda(tokens_list, k, subreddit)
         
         # Step 4: Finalize Output
         response_data = {
             "subreddit": subreddit,
-            "k": int(k),
+            "k": k,
             "coherence": model_results["coherence"],
             "topics": model_results["topics"],
             "edges": model_results["edges"]
