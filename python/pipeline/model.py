@@ -10,7 +10,7 @@ def get_llm_topic_label(words, subreddit):
     Falls back to normal keywords string if Ollama is not running.
     """
     keyword_list = [w for w, _ in words]
-    prompt = f"Given these frequently occurring keywords from a Reddit topic in r/{subreddit}: {', '.join(keyword_list)}\nProvide a short, concise 2-3 word label that summarizes what this topic is about. Return ONLY the label without punctuation or quotes, no explanation."
+    prompt = f"You are labeling a topic from Reddit's r/{subreddit}. Since all posts here are already about {subreddit}, avoid using generic terms related to the subreddit name. Based on these keywords: {', '.join(keyword_list)}, provide a highly specific, concise 2-3 word label that accurately captures this unique sub-topic. Return ONLY the chosen label without punctuation or quotes, no explanation."
     
     try:
         response = requests.post(
@@ -109,6 +109,7 @@ def run_lda(tokens_list: list, k: int, subreddit: str = "subreddit"):
                     snippet = snippet[:197] + "..."
                 citations.append({
                     "url": doc_obj["url"],
+                    "type": doc_obj.get("type", "COMMENT"),
                     "text": snippet
                 })
                 

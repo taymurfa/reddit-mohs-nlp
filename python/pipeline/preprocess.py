@@ -43,15 +43,18 @@ def preprocess_data(texts: list) -> list:
         if isinstance(doc, dict):
             t = doc.get("text", "")
             url = doc.get("url", "")
+            doc_type = doc.get("type", "COMMENT")
         else:
             t = doc
             url = ""
+            doc_type = "COMMENT"
             
         toks = clean_text(t, stop_words, lemmatizer)
         if len(toks) >= 5:
             processed.append({
                 "tokens": toks,
                 "url": url,
-                "original_text": t
+                "original_text": t,
+                "type": doc_type
             })
     return processed

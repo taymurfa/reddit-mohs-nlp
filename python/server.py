@@ -39,7 +39,7 @@ def run_pipeline():
         
     try:
         # Step 1: Collect Data
-        raw_texts = collect_data(subreddit, date_from, date_to)
+        theme_desc, raw_texts = collect_data(subreddit, date_from, date_to)
         if not raw_texts:
             return jsonify({"error": f"No data found for r/{subreddit} in the given date range."}), 404
             
@@ -75,6 +75,7 @@ def run_pipeline():
         # Step 4: Finalize Output
         response_data = {
             "subreddit": subreddit,
+            "theme": theme_desc,
             "k": k,
             "coherence": model_results["coherence"],
             "topics": model_results["topics"],

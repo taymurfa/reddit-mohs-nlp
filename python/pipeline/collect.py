@@ -35,11 +35,23 @@ def _walk_comments(children, out):
         permalink = child.get("data", {}).get("permalink", "")
         url = f"https://www.reddit.com{permalink}" if permalink else ""
         if body and body not in ("[deleted]", "[removed]"):
-            out.append({"text": body, "url": url})
+            out.append({"text": body, "url": url, "type": "COMMENT"})
         replies = child.get("data", {}).get("replies", "")
         if isinstance(replies, dict):
             _walk_comments(replies["data"]["children"], out)
 
+
+def get_subreddit_theme(subreddit_name):
+    """Fetches the official description/theme of the subreddit."""
+    url = f"https://www.reddit.com/r/{subreddit_name}/about.json"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("data", {}).get("public_description", "")
+    except Exception:
+        pass
+    return ""
 
 def collect_data(subreddit_name, date_from_str, date_to_str):
     """
@@ -47,6 +59,7 @@ def collect_data(subreddit_name, date_from_str, date_to_str):
     Uses Reddit's public JSON API — no credentials required.
 
     Post listing is paginated sequentially; comments are fetched in parallel.
+    Returns a tuple of (theme_description, documents_list).
     """
     dt_from = datetime.strptime(date_from_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     ts_from = dt_from.timestamp()
@@ -86,10 +99,12 @@ def collect_data(subreddit_name, date_from_str, date_to_str):
                 break
 
             if created <= ts_to:
-                body = f"{post.get('title', '')} {post.get('selftext', '')}".strip()
+                title = post.get('title', '').strip()
+                selftext = post.get('selftext', '').strip()
+                body = f"TITLE: {title}\n{selftext}".strip()
                 permalink = post.get('permalink', '')
                 url = f"https://www.reddit.com{permalink}" if permalink else ""
-                posts_in_range.append(({"text": body, "url": url}, post["id"]))
+                posts_in_range.append(({"text": body, "url": url, "type": "ORIGINAL_POST"}, post["id"]))
 
         if done:
             break
@@ -117,4 +132,5 @@ def collect_data(subreddit_name, date_from_str, date_to_str):
             except Exception:
                 pass
 
-    return collected_texts
+    theme = get_subreddit_theme(subreddit_name)
+    return theme, collected_texts

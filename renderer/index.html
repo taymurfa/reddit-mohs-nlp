@@ -803,7 +803,8 @@
                 topicData.citations.forEach((cit, idx) => {
                     const block = document.createElement("div");
                     block.className = "citation-item";
-                    block.innerHTML = `<a href="${cit.url}" target="_blank">Source ${idx + 1} ↗</a><div>"${cit.text}"</div>`;
+                    let typeBadge = cit.type === "ORIGINAL_POST" ? `<span style="color:var(--blue);font-weight:600;">[Original Post]</span>` : `<span style="color:var(--purple);font-weight:600;">[Response]</span>`;
+                    block.innerHTML = `<a href="${cit.url}" target="_blank">Source ${idx + 1} ↗</a><div style="margin-top: 4px;">${typeBadge} "${cit.text}"</div>`;
                     citationsContainer.appendChild(block);
                 });
             }
@@ -816,9 +817,15 @@
                 });
                 
                 const keyword_list = topicData.words.map(w => w[0]).join(', ');
-                const prompt = `You are an expert community data analyst analyzing Reddit's r/${subreddit}. Provide a comprehensive but extremely concise 2-3 sentence paragraph summarizing what an overarching conversational topic containing these keywords is likely dealing with: ${keyword_list}. Explain the connection between the terms. Do not use conversational filler, just provide the summary paragraph directly.`;
+                const themeDesc = ldaData.theme ? ldaData.theme : "General community discussion.";
+                const prompt = `You are an expert community data analyst tracking sentiment in Reddit's r/${subreddit}.
+The official overarching theme/description of this subreddit is: "${themeDesc}".
+
+By reading this theme, extrapolate the core goal and context of the sentiment analysis for this community. Given the following cluster of frequent keywords from a specific conversation: [ ${keyword_list} ], write a highly-focused 2-3 sentence sentiment analysis report. 
+
+Identify the specific nuances, user sentiments, pain points, or emotions associated with these keywords within the broader theme. Do not use conversational filler or greetings; provide the analytical report directly.`;
                 
-                loadingText.innerText = "Generating insight...";
+                loadingText.innerText = "Generating sentiment report...";
                 
                 const asyncChunkGenerator = await engine.chat.completions.create({
                     messages: [{role: "user", content: prompt}],
@@ -854,7 +861,8 @@
                 for(let i = 0; i < data.topics.length; i++) {
                     const t = data.topics[i];
                     const keyword_list = t.words.map(w => w[0]).join(', ');
-                    const prompt = `Given these frequently occurring keywords from a Reddit topic in r/${data.subreddit}: ${keyword_list}\nProvide a short, concise 2-3 word label that summarizes what this topic is about. Return ONLY the label without punctuation or quotes, no explanation.`;
+                    const themeDesc = data.theme ? data.theme : "General community discussion.";
+                    const prompt = `You are labeling a topic from Reddit's r/${data.subreddit}. The subreddit's stated theme is: "${themeDesc}". Since all posts already exist within this theme, avoid generic labels related to it. Based on these keywords: ${keyword_list}, provide a highly specific, concise 2-3 word label that pinpoints this unique sub-topic within the theme. Return ONLY the chosen label without punctuation or quotes, no explanation.`;
                     
                     const response = await engine.chat.completions.create({
                         messages: [{role: "user", content: prompt}],
