@@ -30,7 +30,7 @@ from tqdm import tqdm
 OUTPUT_PATH    = os.path.join("data", "raw", "mohs_raw.csv")
 SUBREDDIT_NAME = "MohsSurgery"
 WRITE_BATCH_SIZE = 500
-HEADERS = {"User-Agent": "mohs-reddit-lda/1.0"}
+HEADERS = {"User-Agent": "windows:mohs-reddit-lda:v1.0 (academic research project)"}
 
 # ── Logging setup ──────────────────────────────────────────────────────────────
 

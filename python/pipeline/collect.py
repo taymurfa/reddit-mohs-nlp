@@ -3,7 +3,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-HEADERS = {"User-Agent": "mohs-reddit-lda/1.0"}
+HEADERS = {"User-Agent": "windows:mohs-reddit-lda:v1.0 (academic research project)"}
 REQUEST_DELAY = 0.5   # seconds between requests
 MAX_WORKERS   = 5     # parallel comment fetches
 
