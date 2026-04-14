@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "electron .",
     "build:python": "pyinstaller --name server --onedir --clean --noconfirm --hidden-import=gensim --hidden-import=nltk --hidden-import=requests --distpath dist-python python/server.py",
-    "build:mac": "npm run build:python && electron-builder --mac",
-    "build:win": "npm run build:python && electron-builder --win"
+    "build:mac": "npm run build:python && electron-builder --mac -p never",
+    "build:win": "npm run build:python && electron-builder --win -p never"
   },
   "author": "",
   "license": "ISC",
