@@ -50,22 +50,39 @@ def run_pipeline():
             
         # Step 3: Train LDA
         if k == "auto":
-            best_coherence = -1
+            best_score = -1
             best_results = None
-            best_k = 10
-            for candidate_k in [5, 8, 12, 16]:
+            best_k = 3
+
+            # Scale candidate range to corpus size to avoid over-partitioning small datasets.
+            # Rule of thumb: at most 1 topic per 15 docs, capped at 12.
+            n_docs = len(tokens_list)
+            max_k = min(12, max(3, n_docs // 15))
+            step = max(1, max_k // 4)
+            candidates = list(range(3, max_k + 1, step))
+            if candidates[-1] != max_k:
+                candidates.append(max_k)
+
+            # Small penalty per extra topic so we prefer fewer, cleaner clusters
+            # when coherence differences are marginal.
+            PENALTY_PER_TOPIC = 0.005
+            print(f"Auto-optimize: {n_docs} docs, max_k={max_k}, testing k={candidates}")
+
+            for candidate_k in candidates:
                 try:
                     res = run_lda(tokens_list, int(candidate_k), subreddit)
-                    if res["coherence"] > best_coherence:
-                        best_coherence = res["coherence"]
+                    penalized = res["coherence"] - (candidate_k * PENALTY_PER_TOPIC)
+                    print(f"  k={candidate_k}: coherence={res['coherence']:.3f} penalized={penalized:.3f}")
+                    if penalized > best_score:
+                        best_score = penalized
                         best_results = res
                         best_k = candidate_k
                 except Exception as e:
-                    print(f"Error testing k={candidate_k}: {e}")
-            
+                    print(f"  Error testing k={candidate_k}: {e}")
+
             if not best_results:
                 return jsonify({"error": "Failed to auto-optimize topics."}), 500
-                
+
             model_results = best_results
             k = best_k
         else:
