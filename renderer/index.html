@@ -818,12 +818,23 @@
                 
                 const keyword_list = topicData.words.map(w => w[0]).join(', ');
                 const themeDesc = ldaData.theme ? ldaData.theme : "General community discussion.";
+                
+                // Build source material context from citations
+                let sourceContext = "";
+                if(topicData.citations && topicData.citations.length > 0) {
+                    const excerpts = topicData.citations.map((cit, i) => {
+                        const kind = cit.type === "ORIGINAL_POST" ? "Original Post" : "Response/Comment";
+                        return `[Source ${i+1} — ${kind}]: "${cit.text}"`;
+                    }).join("\n");
+                    sourceContext = `\n\nThe following are real excerpts from Reddit posts and comments that strongly belong to this topic cluster. Use them as grounding evidence to inform your analysis:\n${excerpts}`;
+                }
+
                 const prompt = `You are an expert community data analyst tracking sentiment in Reddit's r/${subreddit}.
 The official overarching theme/description of this subreddit is: "${themeDesc}".
 
-By reading this theme, extrapolate the core goal and context of the sentiment analysis for this community. Given the following cluster of frequent keywords from a specific conversation: [ ${keyword_list} ], write a highly-focused 2-3 sentence sentiment analysis report. 
+By reading this theme, extrapolate the core goal and context of this sentiment analysis. Given the following frequent keywords: [ ${keyword_list} ]${sourceContext}
 
-Identify the specific nuances, user sentiments, pain points, or emotions associated with these keywords within the broader theme. Do not use conversational filler or greetings; provide the analytical report directly.`;
+Using BOTH the keywords AND the source excerpts above as grounding evidence, write a highly-focused 2-3 sentence sentiment analysis report. Identify the specific user sentiments, pain points, emotions, or recurring concerns reflected in this data. Distinguish between what original posters raise versus how responders react where relevant. Do not use conversational filler; provide the analytical report directly.`;
                 
                 loadingText.innerText = "Generating sentiment report...";
                 
