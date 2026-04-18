@@ -1,10 +1,18 @@
 # SubredditLDA
 
-A cross-platform desktop application built with Electron and Python to collect Reddit data and run LDA topic modeling on subreddits.
+A cross-platform desktop application built with Electron and Python to collect Reddit data and perform advanced LDA topic modeling, sentiment analysis, and topic summarization on subreddits.
+
+## Key Features
+
+- **Reddit Data Collection:** Harvest subreddit posts and comments efficiently while cleanly complying with Reddit API rate limits.
+- **Advanced Topic Modeling:** Employs a dynamic, corpus-aware LDA topic optimization algorithm to prevent over-partitioning.
+- **Local AI Summarization:** Integrates WebLLM for client-side, context-aware, privacy-first topic summarization directly on your machine.
+- **RAG-Powered Sentiment Reports:** A Retrieval-Augmented Generation (RAG) pipeline grounds AI-generated sentiment reports in actual Reddit source excerpts, distinctly separating original posts from community responses.
+- **Automated Deployments:** GitHub Actions automatically builds and releases code-signed Windows and macOS executables.
 
 ## Setup for Development
 
-1. **Install Node JS** (v18+) and **Python** (3.10+)
+1. **Install Node.js** (v18+) and **Python** (3.10+)
 2. **Clone the repo**
 3. **Install JS dependencies:**
    `npm install`
@@ -20,4 +28,5 @@ A cross-platform desktop application built with Electron and Python to collect R
    `npm run dev`
 
 ## Setup for End Users
-Download and run the provided `.dmg` (Mac) or `.exe` installer (Windows) from the `dist/` folder. No need to install Python or Node.js.
+
+Automated builds are available via GitHub Actions. Navigate to the Releases page of the repository to download and run the provided `.dmg` (Mac) or `.exe` installer (Windows). No need to manually install Python or Node.js.
