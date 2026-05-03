@@ -11,6 +11,7 @@ const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE ??
   "http://127.0.0.1:8010"
 ).replace(/\/$/, "");
+const API_BASE_IS_LOCAL = API_BASE.includes("127.0.0.1") || API_BASE.includes("localhost");
 const DEFAULT_LDA_STOPWORDS = [
   "mohs",
   "mohs surgery",
@@ -129,6 +130,23 @@ export default function Home() {
   const [collectionProgress, setCollectionProgress] = useState<AnalysisJob["collection_progress"] | null>(null);
   const [error, setError] = useState("");
 
+  async function parseJsonResponse<T>(response: Response): Promise<T> {
+    const text = await response.text();
+    try {
+      return text ? (JSON.parse(text) as T) : ({} as T);
+    } catch {
+      throw new Error(`Backend returned a non-JSON response from ${response.url}: ${text.slice(0, 180)}`);
+    }
+  }
+
+  function networkErrorMessage(err: unknown) {
+    const message = err instanceof Error ? err.message : "Analysis failed";
+    if (message === "Failed to fetch" || message.includes("fetch")) {
+      return `Could not reach the backend at ${API_BASE}. Confirm Vercel has NEXT_PUBLIC_API_BASE_URL set to your Render URL, then redeploy Vercel. Also confirm the Render /health URL opens.`;
+    }
+    return message;
+  }
+
   const payload = useMemo(
     () => ({
       ...form,
@@ -155,7 +173,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await response.json();
+      const data = await parseJsonResponse<{ job_id: string; detail?: string }>(response);
       if (!response.ok) {
         throw new Error(data.detail ?? "Analysis failed");
       }
@@ -163,9 +181,9 @@ export default function Home() {
       while (!finished) {
         await new Promise((resolve) => window.setTimeout(resolve, 700));
         const statusResponse = await fetch(`${API_BASE}/analysis-jobs/${data.job_id}`);
-        const job: AnalysisJob = await statusResponse.json();
+        const job = await parseJsonResponse<AnalysisJob & { detail?: string }>(statusResponse);
         if (!statusResponse.ok) {
-          throw new Error((job as unknown as { detail?: string }).detail ?? "Could not read analysis status");
+          throw new Error(job.detail ?? "Could not read analysis status");
         }
         setProgressStatus(job.status);
         setProgressIndex(job.step_index);
@@ -183,7 +201,7 @@ export default function Home() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Analysis failed");
+      setError(networkErrorMessage(err));
     } finally {
       setRunning(false);
     }
@@ -246,6 +264,9 @@ export default function Home() {
               </div>
               <Toggle label="Include comments" value={form.include_comments} onChange={(value) => setForm({ ...form, include_comments: value })} />
               <Toggle label="Sample data mode" value={form.sample_mode} onChange={(value) => setForm({ ...form, sample_mode: value })} />
+              <div className={`break-all border p-2 text-[11px] leading-4 ${API_BASE_IS_LOCAL ? "border-amber/40 bg-amber/10 text-amber" : "border-line bg-slate-950/40 text-slate-500"}`}>
+                Backend: {API_BASE}
+              </div>
               <button
                 onClick={runAnalysis}
                 disabled={running}
