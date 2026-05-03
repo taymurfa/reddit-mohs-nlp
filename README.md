@@ -1,32 +1,44 @@
-# SubredditLDA
+# Mohs Reddit LDA
 
-A cross-platform desktop application built with Electron and Python to collect Reddit data and perform advanced LDA topic modeling, sentiment analysis, and topic summarization on subreddits.
+Full-stack Reddit NLP analysis app for Mohs surgery discussions. The workflow collects Reddit data from public `.json` endpoints, preprocesses text, trains a gensim LDA model, runs VADER sentiment analysis, generates publication-style Plotly figures, and exports the full analysis bundle.
 
-## Key Features
+## Backend
 
-- **Reddit Data Collection:** Harvest subreddit posts and comments efficiently while cleanly complying with Reddit API rate limits.
-- **Advanced Topic Modeling:** Employs a dynamic, corpus-aware LDA topic optimization algorithm to prevent over-partitioning.
-- **Local AI Summarization:** Integrates WebLLM for client-side, context-aware, privacy-first topic summarization directly on your machine.
-- **RAG-Powered Sentiment Reports:** A Retrieval-Augmented Generation (RAG) pipeline grounds AI-generated sentiment reports in actual Reddit source excerpts, distinctly separating original posts from community responses.
-- **Automated Deployments:** GitHub Actions automatically builds and releases code-signed Windows and macOS executables.
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
 
-## Setup for Development
+The API runs at `http://127.0.0.1:8000`.
 
-1. **Install Node.js** (v18+) and **Python** (3.10+)
-2. **Clone the repo**
-3. **Install JS dependencies:**
-   `npm install`
-4. **Set up Python environment:**
-   Create a virtual environment: `python -m venv venv`
-   Activate the virtual environment:
-     - Windows: `venv\Scripts\activate`
-     - Mac/Linux: `source venv/bin/activate`
-   Install Python dependencies: `pip install -r requirements.txt`
-5. **Set up credentials:**
-   Rename `.env.example` to `.env` and insert your Reddit API credentials.
-6. **Run development version:**
-   `npm run dev`
+If port `8000` is already occupied on your machine, use another port:
 
-## Setup for End Users
+```bash
+uvicorn main:app --reload --port 8010
+```
 
-Automated builds are available via GitHub Actions. Navigate to the Releases page of the repository to download and run the provided `.dmg` (Mac) or `.exe` installer (Windows). No need to manually install Python or Node.js.
+## Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The app runs at `http://localhost:3000`.
+
+When the backend is not on port `8000`, start the frontend with:
+
+```bash
+set NEXT_PUBLIC_API_BASE=http://127.0.0.1:8010&& npm run dev
+```
+
+## Notes
+
+- Reddit collection uses only public `.json` endpoints and sends a User-Agent header.
+- Enable sample data mode in the UI to test the full workflow without making Reddit requests.
+- Exports are written under `backend/exports/{run_id}` and exposed by FastAPI at `/exports/...`.
+- Topic summaries use `OPENAI_API_KEY` when available. Without it, the app falls back to deterministic local summaries and still exports `final_topics_comparison.xlsx`.

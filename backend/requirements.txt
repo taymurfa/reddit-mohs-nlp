@@ -1,0 +1,17 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pandas>=2.2.3
+numpy<2.0; python_version < "3.13"
+numpy>=2.1.0; python_version >= "3.13"
+gensim>=4.3.3
+scikit-learn>=1.5.2
+nltk==3.9.1
+vaderSentiment==3.3.2
+requests==2.32.3
+plotly==5.24.1
+kaleido==0.2.1
+python-multipart==0.0.19
+pydantic==2.10.3
+httpx==0.28.1
+openpyxl==3.1.5
+python-dotenv==1.2.2
