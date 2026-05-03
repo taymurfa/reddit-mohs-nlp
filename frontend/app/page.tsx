@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { BarChart3, Download, FileSpreadsheet, Loader2, Play, SlidersHorizontal } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, Download, FileSpreadsheet, Loader2, Network, Play, SlidersHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -40,6 +40,8 @@ const PROGRESS_STEPS = [
   "Generating figures",
   "Exporting results",
 ];
+const TOPIC_SECTIONS = ["Summary", "Evidence", "Recommendations", "Examples", "Edit"] as const;
+type TopicSection = (typeof TOPIC_SECTIONS)[number];
 
 type Topic = {
   topic: number;
@@ -129,6 +131,9 @@ export default function Home() {
   const [progressStatus, setProgressStatus] = useState<AnalysisJob["status"] | "idle">("idle");
   const [collectionProgress, setCollectionProgress] = useState<AnalysisJob["collection_progress"] | null>(null);
   const [error, setError] = useState("");
+  const [inputsOpen, setInputsOpen] = useState(true);
+  const [selectedTopicIndex, setSelectedTopicIndex] = useState(0);
+  const [activeTopicSection, setActiveTopicSection] = useState<TopicSection>("Summary");
 
   async function parseJsonResponse<T>(response: Response): Promise<T> {
     const text = await response.text();
@@ -194,6 +199,9 @@ export default function Home() {
           }
           setResult(job.result);
           setTopics(job.result.topics);
+          setSelectedTopicIndex(0);
+          setActiveTopicSection("Summary");
+          setInputsOpen(false);
           finished = true;
         }
         if (job.status === "failed") {
@@ -212,6 +220,7 @@ export default function Home() {
   }
 
   const primaryExport = result?.export_links.find((link) => link.name === "final_topics_comparison.xlsx");
+  const selectedTopic = topics[selectedTopicIndex] ?? topics[0];
 
   return (
     <main className="min-h-screen bg-ink text-slate-100">
@@ -231,12 +240,42 @@ export default function Home() {
           </div>
         </header>
 
-        <section className="grid gap-5 lg:grid-cols-[360px_1fr]">
+        <section className={`grid gap-5 ${result ? "lg:grid-cols-[260px_1fr]" : "lg:grid-cols-[360px_1fr]"}`}>
           <aside className="h-fit border border-line bg-panel p-4 shadow-glow lg:sticky lg:top-5">
-            <div className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
-              <SlidersHorizontal size={16} /> Analysis Inputs
-            </div>
-            <div className="grid gap-4">
+            <button
+              type="button"
+              onClick={() => setInputsOpen((value) => !value)}
+              className="flex w-full items-center justify-between gap-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-accent"
+            >
+              <span className="flex items-center gap-2"><SlidersHorizontal size={16} /> Analysis Inputs</span>
+              {result && (inputsOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+            </button>
+            {result && !inputsOpen && (
+              <div className="mt-4 grid gap-3 text-xs text-slate-400">
+                <div className="border border-line bg-slate-950/40 p-3">
+                  <div className="text-slate-500">Subreddit</div>
+                  <div className="mt-1 font-medium text-slate-100">{form.subreddit}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="border border-line bg-slate-950/40 p-3">
+                    <div className="text-slate-500">Topics</div>
+                    <div className="mt-1 font-medium text-slate-100">{form.k}</div>
+                  </div>
+                  <div className="border border-line bg-slate-950/40 p-3">
+                    <div className="text-slate-500">Max posts</div>
+                    <div className="mt-1 font-medium text-slate-100">{form.max_results}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInputsOpen(true)}
+                  className="border border-line bg-slate-950/40 px-3 py-2 text-left text-slate-200 hover:border-accent"
+                >
+                  Edit analysis inputs
+                </button>
+              </div>
+            )}
+            {(!result || inputsOpen) && <div className="mt-4 grid gap-4">
               <Label text="Subreddit">
                 <input className="field" value={form.subreddit} onChange={(e) => setForm({ ...form, subreddit: e.target.value })} />
               </Label>
@@ -275,7 +314,7 @@ export default function Home() {
                 {running ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />}
                 Run Analysis
               </button>
-            </div>
+            </div>}
 
             {(running || result) && (
               <div className="mt-5 border-t border-line pt-4">
@@ -341,11 +380,25 @@ export default function Home() {
                   </div>
                 </Panel>
 
-                <Panel title="Final Recovery Advice Topics">
-                  <div className="grid gap-4">
-                    {topics.map((topic, index) => (
-                      <TopicCard key={topic.topic} topic={topic} index={index} onUpdate={updateTopic} />
-                    ))}
+                <Panel title="Recovery Advice Topic Map">
+                  <div className="grid gap-4 xl:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)]">
+                    <TopicGraph
+                      topics={topics}
+                      selectedIndex={selectedTopicIndex}
+                      onSelect={(index) => {
+                        setSelectedTopicIndex(index);
+                        setActiveTopicSection("Summary");
+                      }}
+                    />
+                    {selectedTopic && (
+                      <TopicDetail
+                        topic={selectedTopic}
+                        index={selectedTopicIndex}
+                        activeSection={activeTopicSection}
+                        onSectionChange={setActiveTopicSection}
+                        onUpdate={updateTopic}
+                      />
+                    )}
                   </div>
                 </Panel>
 
@@ -433,86 +486,146 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
   );
 }
 
-function TopicCard({ topic, index, onUpdate }: { topic: Topic; index: number; onUpdate: (index: number, key: "label" | "category", value: string) => void }) {
+function TopicGraph({ topics, selectedIndex, onSelect }: { topics: Topic[]; selectedIndex: number; onSelect: (index: number) => void }) {
+  if (!topics.length) {
+    return <div className="border border-line bg-slate-950/30 p-4 text-sm text-slate-500">No topics available.</div>;
+  }
+
+  return (
+    <div className="relative min-h-[460px] overflow-hidden border border-line bg-slate-950/30 p-4">
+      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+        <Network size={15} /> Click a topic node
+      </div>
+      <div className="topic-graph">
+        <div className="topic-core">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Corpus</div>
+          <div className="mt-1 text-lg font-semibold text-white">{topics.reduce((sum, topic) => sum + topic.doc_count, 0)} docs</div>
+        </div>
+        {topics.map((topic, index) => {
+          const angle = (index / Math.max(topics.length, 1)) * Math.PI * 2 - Math.PI / 2;
+          const radius = topics.length <= 5 ? 36 : 39;
+          const x = 50 + Math.cos(angle) * radius;
+          const y = 50 + Math.sin(angle) * radius;
+          const active = index === selectedIndex;
+          return (
+            <button
+              type="button"
+              key={topic.topic}
+              onClick={() => onSelect(index)}
+              className={`topic-node ${active ? "topic-node-active" : ""}`}
+              style={{ left: `${x}%`, top: `${y}%` }}
+            >
+              <span className="text-[11px] uppercase tracking-wide">Topic {topic.topic + 1}</span>
+              <span className="line-clamp-2 text-sm font-semibold">{topic.llm_topic_title || topic.label}</span>
+              <span className="text-[11px] text-slate-400">{topic.percentage}% | {topic.doc_count} docs</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="pointer-events-none absolute inset-x-8 bottom-6 h-px bg-gradient-to-r from-transparent via-line to-transparent" />
+    </div>
+  );
+}
+
+function TopicDetail({
+  topic,
+  index,
+  activeSection,
+  onSectionChange,
+  onUpdate,
+}: {
+  topic: Topic;
+  index: number;
+  activeSection: TopicSection;
+  onSectionChange: (section: TopicSection) => void;
+  onUpdate: (index: number, key: "label" | "category", value: string) => void;
+}) {
   const examples = topic.example_documents?.length
     ? topic.example_documents
     : [{ id: `${topic.topic}-rep`, type: "", date: "", score: 0, permalink: "", text: topic.representative_document }];
 
   return (
     <article className="border border-line bg-slate-950/25 p-4">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
         <div>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">Topic {topic.topic + 1}</div>
-              <h3 className="mt-1 text-lg font-semibold text-white">{topic.llm_topic_title || topic.label}</h3>
-            </div>
-            <div className="flex gap-2 text-xs text-slate-400">
-              <span className="border border-line bg-panel px-2 py-1">{topic.doc_count} docs</span>
-              <span className="border border-line bg-panel px-2 py-1">{topic.percentage}%</span>
-              <span className="border border-line bg-panel px-2 py-1">distinct {topic.distinctiveness}</span>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
-              Editable label
-              <input className="table-field w-full" value={topic.label} onChange={(e) => onUpdate(index, "label", e.target.value)} />
-            </label>
-            <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
-              Category
-              <select className="table-field w-full" value={topic.category} onChange={(e) => onUpdate(index, "category", e.target.value)}>
-                {CATEGORIES.map((category) => (
-                  <option key={category}>{category}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            {topic.keywords.map((keyword) => (
-              <span key={keyword} className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-300">
-                {keyword.replaceAll("_", " ")}
-              </span>
-            ))}
-          </div>
-
-          <p className="mt-4 text-sm leading-6 text-slate-300">{topic.llm_summary}</p>
-          {topic.llm_explanation && <p className="mt-2 text-sm leading-6 text-slate-400">{topic.llm_explanation}</p>}
-          {(topic.evidence_source_ids || topic.notable_recommendations || topic.cautions_or_uncertainties) && (
-            <div className="mt-4 grid gap-2 text-xs leading-5 text-slate-400 md:grid-cols-3">
-              {topic.evidence_source_ids && (
-                <div className="border border-line bg-panel p-2">
-                  <div className="mb-1 uppercase tracking-wide text-slate-500">Evidence</div>
-                  {formatJsonList(topic.evidence_source_ids)}
-                </div>
-              )}
-              {topic.notable_recommendations && (
-                <div className="border border-line bg-panel p-2">
-                  <div className="mb-1 uppercase tracking-wide text-slate-500">Recommendations</div>
-                  {formatJsonList(topic.notable_recommendations)}
-                </div>
-              )}
-              {topic.cautions_or_uncertainties && (
-                <div className="border border-line bg-panel p-2">
-                  <div className="mb-1 uppercase tracking-wide text-slate-500">Cautions</div>
-                  {topic.cautions_or_uncertainties}
-                </div>
-              )}
-            </div>
-          )}
-          {topic.official_practice_area && (
-            <div className="mt-4 border border-amber/30 bg-amber/10 p-3 text-xs leading-5 text-amber">
-              {topic.official_practice_area}
-            </div>
-          )}
-          {topic.llm_summary_source && <div className="mt-3 text-[11px] uppercase tracking-wide text-slate-600">Summary source: {topic.llm_summary_source}</div>}
-          {topic.llm_error && <div className="mt-2 text-xs leading-5 text-red-300">LLM fallback reason: {topic.llm_error}</div>}
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">Topic {topic.topic + 1}</div>
+          <h3 className="mt-1 text-xl font-semibold text-white">{topic.llm_topic_title || topic.label}</h3>
         </div>
+        <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+          <span className="border border-line bg-panel px-2 py-1">{topic.doc_count} docs</span>
+          <span className="border border-line bg-panel px-2 py-1">{topic.percentage}%</span>
+          <span className="border border-line bg-panel px-2 py-1">distinct {topic.distinctiveness}</span>
+        </div>
+      </div>
 
-        <div className="border border-line bg-ink/40 p-3">
-          <div className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Representative examples</div>
-          <div className="grid max-h-[420px] gap-3 overflow-auto pr-1">
+      <div className="mt-4 flex flex-wrap gap-2">
+        {TOPIC_SECTIONS.map((section) => (
+          <button
+            type="button"
+            key={section}
+            onClick={() => onSectionChange(section)}
+            className={`flex items-center gap-1 border px-3 py-2 text-xs font-medium uppercase tracking-wide transition ${
+              activeSection === section ? "border-accent bg-teal-950/30 text-accent" : "border-line bg-panel text-slate-400 hover:border-slate-500 hover:text-slate-100"
+            }`}
+          >
+            {activeSection === section ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            {section}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4 min-h-[300px] border border-line bg-ink/40 p-4">
+        {activeSection === "Summary" && (
+          <div>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {topic.keywords.map((keyword) => (
+                <span key={keyword} className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-300">
+                  {keyword.replaceAll("_", " ")}
+                </span>
+              ))}
+            </div>
+            <p className="text-sm leading-6 text-slate-300">{topic.llm_summary}</p>
+            {topic.llm_explanation && <p className="mt-3 text-sm leading-6 text-slate-400">{topic.llm_explanation}</p>}
+            {topic.official_practice_area && (
+              <div className="mt-4 border border-amber/30 bg-amber/10 p-3 text-xs leading-5 text-amber">
+                {topic.official_practice_area}
+              </div>
+            )}
+            {topic.llm_summary_source && <div className="mt-3 text-[11px] uppercase tracking-wide text-slate-600">Summary source: {topic.llm_summary_source}</div>}
+            {topic.llm_error && <div className="mt-2 text-xs leading-5 text-red-300">LLM fallback reason: {topic.llm_error}</div>}
+          </div>
+        )}
+
+        {activeSection === "Evidence" && (
+          <div className="grid gap-3 text-sm leading-6 text-slate-300">
+            <div className="border border-line bg-panel p-3">
+              <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Evidence source IDs</div>
+              {topic.evidence_source_ids ? formatJsonList(topic.evidence_source_ids) : "No evidence IDs returned."}
+            </div>
+            <div className="border border-line bg-panel p-3">
+              <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Cautions and uncertainty</div>
+              {topic.cautions_or_uncertainties ? formatJsonList(topic.cautions_or_uncertainties) : "No cautions returned."}
+            </div>
+          </div>
+        )}
+
+        {activeSection === "Recommendations" && (
+          <div className="grid gap-3 text-sm leading-6 text-slate-300">
+            <div className="border border-line bg-panel p-3">
+              <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Notable recommendations</div>
+              {topic.notable_recommendations ? formatJsonList(topic.notable_recommendations) : "No recommendations returned."}
+            </div>
+            {topic.comparison_guidance && (
+              <div className="border border-line bg-panel p-3">
+                <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Comparison guidance</div>
+                {topic.comparison_guidance}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeSection === "Examples" && (
+          <div className="grid max-h-[430px] gap-3 overflow-auto pr-1">
             {examples.map((example) => (
               <div key={example.id} className="border border-line/70 bg-slate-950/40 p-3">
                 <div className="mb-2 flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-slate-500">
@@ -529,7 +642,24 @@ function TopicCard({ topic, index, onUpdate }: { topic: Topic; index: number; on
               </div>
             ))}
           </div>
-        </div>
+        )}
+
+        {activeSection === "Edit" && (
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+              Editable label
+              <input className="table-field w-full" value={topic.label} onChange={(e) => onUpdate(index, "label", e.target.value)} />
+            </label>
+            <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+              Category
+              <select className="table-field w-full" value={topic.category} onChange={(e) => onUpdate(index, "category", e.target.value)}>
+                {CATEGORIES.map((category) => (
+                  <option key={category}>{category}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
       </div>
     </article>
   );
@@ -551,6 +681,16 @@ function formatJsonList(value: string) {
       return parsed.join(", ");
     }
   } catch {
+    if (value.startsWith("[") && value.endsWith("]")) {
+      const items = value
+        .slice(1, -1)
+        .split(/',\s*'/)
+        .map((item) => item.replace(/^['"]|['"]$/g, "").trim())
+        .filter(Boolean);
+      if (items.length > 1) {
+        return items.join(", ");
+      }
+    }
     return value;
   }
   return value;
