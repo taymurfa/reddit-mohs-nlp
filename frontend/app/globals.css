@@ -10,6 +10,7 @@ body {
   margin: 0;
   background: #090b10;
   color: #e5e7eb;
+  font-feature-settings: "tnum";
 }
 
 input,
@@ -25,10 +26,10 @@ textarea {
 
 @layer components {
   .field {
-    @apply w-full rounded border border-line bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent;
+    @apply w-full rounded border border-line bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent;
   }
 
   .table-field {
-    @apply rounded border border-line bg-slate-950/70 px-2 py-1.5 text-xs text-slate-100 outline-none focus:border-accent;
+    @apply rounded border border-line bg-slate-950/80 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-accent;
   }
 }

@@ -1,12 +1,16 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Download, Loader2, Play, SlidersHorizontal } from "lucide-react";
+import { BarChart3, Download, FileSpreadsheet, Loader2, Play, SlidersHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8010";
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_API_BASE ??
+  "http://127.0.0.1:8010"
+).replace(/\/$/, "");
 const DEFAULT_LDA_STOPWORDS = [
   "mohs",
   "mohs surgery",
@@ -27,7 +31,8 @@ const CATEGORIES = [
   "Information appraisal",
 ];
 const PROGRESS_STEPS = [
-  "Collecting Reddit data",
+  "Collecting Reddit posts",
+  "Collecting Reddit comments",
   "Cleaning text",
   "Running LDA",
   "Running sentiment",
@@ -55,9 +60,13 @@ type Topic = {
   llm_topic_title?: string;
   llm_summary?: string;
   llm_explanation?: string;
+  evidence_source_ids?: string;
+  notable_recommendations?: string;
+  cautions_or_uncertainties?: string;
   official_practice_area?: string;
   comparison_guidance?: string;
   llm_summary_source?: string;
+  llm_error?: string;
 };
 
 type FigureSpec = {
@@ -86,6 +95,17 @@ type AnalysisJob = {
   step_index: number;
   step: string;
   steps: string[];
+  collection_progress?: {
+    phase: string;
+    posts_collected: number;
+    comments_collected: number;
+    max_posts: number;
+    comment_fetches: number;
+    comments_target: number;
+    eta_seconds: number | null;
+    elapsed_seconds: number;
+    collection_status: string;
+  };
   result: AnalysisResult | null;
   error: string | null;
 };
@@ -106,6 +126,7 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const [progressIndex, setProgressIndex] = useState(-1);
   const [progressStatus, setProgressStatus] = useState<AnalysisJob["status"] | "idle">("idle");
+  const [collectionProgress, setCollectionProgress] = useState<AnalysisJob["collection_progress"] | null>(null);
   const [error, setError] = useState("");
 
   const payload = useMemo(
@@ -127,6 +148,7 @@ export default function Home() {
     setError("");
     setResult(null);
     setProgressIndex(-1);
+    setCollectionProgress(null);
     try {
       const response = await fetch(`${API_BASE}/analysis-jobs`, {
         method: "POST",
@@ -147,6 +169,7 @@ export default function Home() {
         }
         setProgressStatus(job.status);
         setProgressIndex(job.step_index);
+        setCollectionProgress(job.collection_progress ?? null);
         if (job.status === "completed") {
           if (!job.result) {
             throw new Error("Analysis completed without results");
@@ -170,22 +193,29 @@ export default function Home() {
     setTopics((items) => items.map((topic, i) => (i === index ? { ...topic, [key]: value } : topic)));
   }
 
+  const primaryExport = result?.export_links.find((link) => link.name === "final_topics_comparison.xlsx");
+
   return (
     <main className="min-h-screen bg-ink text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 lg:px-6">
-        <header className="flex flex-col gap-2 border-b border-line pb-5 md:flex-row md:items-end md:justify-between">
+      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 px-4 py-5 lg:px-6">
+        <header className="flex flex-col gap-4 border-b border-line pb-5 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-3xl font-semibold tracking-normal text-white">Mohs Reddit NLP Analysis</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-              One-step LDA topic modeling, sentiment analysis, treatment mentions, shared domains, figures, and exports from Reddit public JSON data.
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Reddit recovery advice mining</div>
+            <h1 className="mt-2 text-2xl font-semibold tracking-normal text-white md:text-3xl">Post-Mohs Recovery Topic Analysis</h1>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-400">
+              Collect Reddit discussions, isolate management and recovery recommendations, model common advice themes, summarize topics, and export a comparison workbook for official post-op guidance review.
             </p>
           </div>
-          <div className="rounded border border-line bg-panel px-3 py-2 text-xs text-slate-300">FastAPI + gensim + VADER + Plotly</div>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-300">
+            <span className="rounded border border-line bg-panel px-3 py-2">FastAPI</span>
+            <span className="rounded border border-line bg-panel px-3 py-2">gensim LDA</span>
+            <span className="rounded border border-line bg-panel px-3 py-2">LLM summaries</span>
+          </div>
         </header>
 
-        <section className="grid gap-6 lg:grid-cols-[380px_1fr]">
-          <aside className="h-fit border border-line bg-panel p-4 shadow-glow">
-            <div className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-accent">
+        <section className="grid gap-5 lg:grid-cols-[360px_1fr]">
+          <aside className="h-fit border border-line bg-panel p-4 shadow-glow lg:sticky lg:top-5">
+            <div className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
               <SlidersHorizontal size={16} /> Analysis Inputs
             </div>
             <div className="grid gap-4">
@@ -208,8 +238,11 @@ export default function Home() {
                   <input type="number" min={2} max={50} className="field" value={form.k} onChange={(e) => setForm({ ...form, k: Number(e.target.value) })} />
                 </Label>
                 <Label text="Max posts">
-                  <input type="number" min={10} max={5000} className="field" value={form.max_results} onChange={(e) => setForm({ ...form, max_results: Number(e.target.value) })} />
+                  <input type="number" min={10} max={5000} step={10} className="field" value={form.max_results} onChange={(e) => setForm({ ...form, max_results: Number(e.target.value) })} />
                 </Label>
+              </div>
+              <div className="text-xs leading-5 text-slate-500">
+                Larger runs are allowed. The backend slows Reddit requests automatically; runs above 100 posts can take several minutes, especially with comments enabled.
               </div>
               <Toggle label="Include comments" value={form.include_comments} onChange={(value) => setForm({ ...form, include_comments: value })} />
               <Toggle label="Sample data mode" value={form.sample_mode} onChange={(value) => setForm({ ...form, sample_mode: value })} />
@@ -238,22 +271,46 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
+                {collectionProgress && (progressIndex === 0 || progressIndex === 1) && (
+                  <div className="mt-3 border border-line bg-slate-950/40 p-3 text-xs text-slate-300">
+                    <div className="font-semibold text-slate-100">
+                      {progressIndex === 0
+                        ? `${collectionProgress.posts_collected}/${collectionProgress.max_posts} posts collected`
+                        : `${collectionProgress.comment_fetches}/${collectionProgress.comments_target || collectionProgress.posts_collected} post comment trees fetched`}
+                    </div>
+                    <div className="mt-1">
+                      {collectionProgress.posts_collected}/{collectionProgress.max_posts} posts collected; {collectionProgress.comments_collected} comments collected
+                    </div>
+                    <div className="mt-1 text-slate-400">
+                      {collectionProgress.eta_seconds !== null
+                        ? `Estimated time remaining: ${formatDuration(collectionProgress.eta_seconds)}`
+                        : "Estimated time remaining: calculating..."}
+                    </div>
+                    <div className="mt-1 text-slate-500">{collectionProgress.collection_status}</div>
+                  </div>
+                )}
               </div>
             )}
             {error && <div className="mt-4 border border-red-500/40 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
           </aside>
 
-          <section className="grid gap-6">
+          <section className="grid gap-5">
             {!result && (
-              <div className="flex min-h-96 items-center justify-center border border-line bg-panel p-8 text-center text-slate-400">
-                Configure the form and run the pipeline to populate corpus statistics, LDA topics, sentiment panels, figures, and exports.
+              <div className="flex min-h-[520px] items-center justify-center border border-line bg-panel p-8 text-center text-slate-400">
+                <div>
+                  <BarChart3 className="mx-auto mb-4 text-slate-600" size={42} />
+                  <div className="text-base font-medium text-slate-200">No analysis loaded</div>
+                  <div className="mt-2 max-w-xl text-sm leading-6">
+                    Configure the run, then generate focused recovery-advice topics, representative examples, charts, and export files.
+                  </div>
+                </div>
               </div>
             )}
 
             {result && (
               <>
                 <Panel title="Corpus Statistics">
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
                     {Object.entries(result.corpus_stats).map(([key, value]) => (
                       <div key={key} className="border border-line bg-slate-950/30 p-3">
                         <div className="text-xs uppercase tracking-wide text-slate-500">{key.replaceAll("_", " ")}</div>
@@ -263,71 +320,23 @@ export default function Home() {
                   </div>
                 </Panel>
 
-                <Panel title="LDA Topics Table">
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[980px] border-collapse text-sm">
-                      <thead>
-                        <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-slate-500">
-                          <th className="py-2 pr-3">Topic</th>
-                          <th className="py-2 pr-3">Label</th>
-                          <th className="py-2 pr-3">Category</th>
-                          <th className="py-2 pr-3">Keywords</th>
-                          <th className="py-2 pr-3">LLM summary</th>
-                          <th className="py-2 pr-3">Docs</th>
-                          <th className="py-2 pr-3">%</th>
-                          <th className="py-2 pr-3">Distinct</th>
-                          <th className="py-2">Representative examples</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {topics.map((topic, index) => (
-                          <tr key={topic.topic} className="border-b border-line/70 align-top">
-                            <td className="py-3 pr-3 font-semibold text-accent">T{topic.topic + 1}</td>
-                            <td className="py-3 pr-3">
-                              <input className="table-field w-36" value={topic.label} onChange={(e) => updateTopic(index, "label", e.target.value)} />
-                            </td>
-                            <td className="py-3 pr-3">
-                              <select className="table-field w-52" value={topic.category} onChange={(e) => updateTopic(index, "category", e.target.value)}>
-                                {CATEGORIES.map((category) => (
-                                  <option key={category}>{category}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="max-w-xs py-3 pr-3 text-slate-300">{topic.keywords.join(", ")}</td>
-                            <td className="max-w-sm py-3 pr-3 text-slate-300">
-                              <div className="font-medium text-slate-100">{topic.llm_topic_title || topic.label}</div>
-                              <div className="mt-1 text-slate-400">{topic.llm_summary}</div>
-                              {topic.official_practice_area && <div className="mt-2 text-xs text-amber">{topic.official_practice_area}</div>}
-                              {topic.llm_summary_source && <div className="mt-2 text-[11px] uppercase tracking-wide text-slate-600">{topic.llm_summary_source}</div>}
-                            </td>
-                            <td className="py-3 pr-3">{topic.doc_count}</td>
-                            <td className="py-3 pr-3">{topic.percentage}</td>
-                            <td className="py-3 pr-3">{topic.distinctiveness}</td>
-                            <td className="max-w-md py-3 text-slate-400">
-                              <div className="grid gap-2">
-                                {(topic.example_documents?.length ? topic.example_documents : [{ id: `${topic.topic}-rep`, type: "", date: "", score: 0, permalink: "", text: topic.representative_document }]).map((example) => (
-                                  <div key={example.id} className="border border-line/70 bg-slate-950/30 p-2">
-                                    <div className="mb-1 flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-slate-500">
-                                      {example.type && <span>{example.type}</span>}
-                                      {example.date && <span>{example.date}</span>}
-                                      {Number.isFinite(example.score) && <span>score {example.score}</span>}
-                                      {example.permalink && (
-                                        <a href={example.permalink} target="_blank" rel="noreferrer" className="text-accent hover:text-teal-200">
-                                          source
-                                        </a>
-                                      )}
-                                    </div>
-                                    <div>{example.text}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                <Panel title="Final Recovery Advice Topics">
+                  <div className="grid gap-4">
+                    {topics.map((topic, index) => (
+                      <TopicCard key={topic.topic} topic={topic} index={index} onUpdate={updateTopic} />
+                    ))}
                   </div>
                 </Panel>
+
+                {primaryExport && (
+                  <a href={`${API_BASE}${primaryExport.url}`} className="flex items-center justify-between gap-3 border border-accent/40 bg-teal-950/20 px-4 py-3 text-sm text-slate-100 hover:border-accent">
+                    <span className="flex items-center gap-2">
+                      <FileSpreadsheet size={18} className="text-accent" />
+                      Download final topics comparison workbook
+                    </span>
+                    <span className="text-xs text-slate-400">{primaryExport.name}</span>
+                  </a>
+                )}
 
                 <Panel title="Figures Panel">
                   <div className="grid gap-4 xl:grid-cols-2">
@@ -380,6 +389,18 @@ function Label({ text, children }: { text: string; children: React.ReactNode }) 
   );
 }
 
+function formatDuration(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return "calculating...";
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes <= 0) {
+    return `${remainingSeconds}s`;
+  }
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
   return (
     <button type="button" onClick={() => onChange(!value)} className="flex items-center justify-between border border-line bg-slate-950/40 px-3 py-2 text-sm">
@@ -391,6 +412,108 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
   );
 }
 
+function TopicCard({ topic, index, onUpdate }: { topic: Topic; index: number; onUpdate: (index: number, key: "label" | "category", value: string) => void }) {
+  const examples = topic.example_documents?.length
+    ? topic.example_documents
+    : [{ id: `${topic.topic}-rep`, type: "", date: "", score: 0, permalink: "", text: topic.representative_document }];
+
+  return (
+    <article className="border border-line bg-slate-950/25 p-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">Topic {topic.topic + 1}</div>
+              <h3 className="mt-1 text-lg font-semibold text-white">{topic.llm_topic_title || topic.label}</h3>
+            </div>
+            <div className="flex gap-2 text-xs text-slate-400">
+              <span className="border border-line bg-panel px-2 py-1">{topic.doc_count} docs</span>
+              <span className="border border-line bg-panel px-2 py-1">{topic.percentage}%</span>
+              <span className="border border-line bg-panel px-2 py-1">distinct {topic.distinctiveness}</span>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+              Editable label
+              <input className="table-field w-full" value={topic.label} onChange={(e) => onUpdate(index, "label", e.target.value)} />
+            </label>
+            <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+              Category
+              <select className="table-field w-full" value={topic.category} onChange={(e) => onUpdate(index, "category", e.target.value)}>
+                {CATEGORIES.map((category) => (
+                  <option key={category}>{category}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {topic.keywords.map((keyword) => (
+              <span key={keyword} className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-300">
+                {keyword.replaceAll("_", " ")}
+              </span>
+            ))}
+          </div>
+
+          <p className="mt-4 text-sm leading-6 text-slate-300">{topic.llm_summary}</p>
+          {topic.llm_explanation && <p className="mt-2 text-sm leading-6 text-slate-400">{topic.llm_explanation}</p>}
+          {(topic.evidence_source_ids || topic.notable_recommendations || topic.cautions_or_uncertainties) && (
+            <div className="mt-4 grid gap-2 text-xs leading-5 text-slate-400 md:grid-cols-3">
+              {topic.evidence_source_ids && (
+                <div className="border border-line bg-panel p-2">
+                  <div className="mb-1 uppercase tracking-wide text-slate-500">Evidence</div>
+                  {formatJsonList(topic.evidence_source_ids)}
+                </div>
+              )}
+              {topic.notable_recommendations && (
+                <div className="border border-line bg-panel p-2">
+                  <div className="mb-1 uppercase tracking-wide text-slate-500">Recommendations</div>
+                  {formatJsonList(topic.notable_recommendations)}
+                </div>
+              )}
+              {topic.cautions_or_uncertainties && (
+                <div className="border border-line bg-panel p-2">
+                  <div className="mb-1 uppercase tracking-wide text-slate-500">Cautions</div>
+                  {topic.cautions_or_uncertainties}
+                </div>
+              )}
+            </div>
+          )}
+          {topic.official_practice_area && (
+            <div className="mt-4 border border-amber/30 bg-amber/10 p-3 text-xs leading-5 text-amber">
+              {topic.official_practice_area}
+            </div>
+          )}
+          {topic.llm_summary_source && <div className="mt-3 text-[11px] uppercase tracking-wide text-slate-600">Summary source: {topic.llm_summary_source}</div>}
+          {topic.llm_error && <div className="mt-2 text-xs leading-5 text-red-300">LLM fallback reason: {topic.llm_error}</div>}
+        </div>
+
+        <div className="border border-line bg-ink/40 p-3">
+          <div className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Representative examples</div>
+          <div className="grid max-h-[420px] gap-3 overflow-auto pr-1">
+            {examples.map((example) => (
+              <div key={example.id} className="border border-line/70 bg-slate-950/40 p-3">
+                <div className="mb-2 flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+                  {example.type && <span>{example.type}</span>}
+                  {example.date && <span>{example.date}</span>}
+                  {Number.isFinite(example.score) && <span>score {example.score}</span>}
+                  {example.permalink && (
+                    <a href={example.permalink} target="_blank" rel="noreferrer" className="text-accent hover:text-teal-200">
+                      source
+                    </a>
+                  )}
+                </div>
+                <div className="text-sm leading-6 text-slate-400">{example.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border border-line bg-panel p-4 shadow-glow">
@@ -398,6 +521,18 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       {children}
     </section>
   );
+}
+
+function formatJsonList(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.join(", ");
+    }
+  } catch {
+    return value;
+  }
+  return value;
 }
 
 function DataTable({ rows }: { rows: Array<Record<string, string | number>> }) {

@@ -38,6 +38,10 @@ EXPORT_ROOT.mkdir(exist_ok=True)
 
 REDDIT_BASE = "https://www.reddit.com"
 USER_AGENT = "mohs-reddit-lda/1.0 academic analysis app"
+POST_LISTING_DELAY_SECONDS = 2.5
+COMMENT_DELAY_SECONDS = 2.0
+LARGE_RUN_COMMENT_DELAY_SECONDS = 3.5
+MAX_COMMENT_FETCHES_PER_RUN = 250
 MOHS_STOPWORDS = {
     "mohs",
     "surgery",
@@ -446,17 +450,28 @@ RECOMMENDATION_VOCAB = {
     "sleep_rest_positioning": ["sleep", "rest", "position", "side"],
 }
 
+def cors_origins() -> list[str]:
+    configured = [
+        origin.strip().rstrip("/")
+        for origin in os.getenv("CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    return ["http://localhost:3000", "http://127.0.0.1:3000", *configured]
+
+
 app = FastAPI(title="Mohs Reddit LDA API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=cors_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.mount("/exports", StaticFiles(directory=str(EXPORT_ROOT)), name="exports")
 ANALYSIS_STEPS = [
-    "Collecting Reddit data",
+    "Collecting Reddit posts",
+    "Collecting Reddit comments",
     "Cleaning text",
     "Running LDA",
     "Running sentiment",
@@ -487,7 +502,7 @@ class AnalysisJobCreated(BaseModel):
     job_id: str
 
 
-def reddit_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any] | list[Any]:
+def reddit_get(path: str, params: dict[str, Any] | None = None, delay_seconds: float = POST_LISTING_DELAY_SECONDS) -> dict[str, Any] | list[Any]:
     url = f"{REDDIT_BASE}{path}"
     headers = {"User-Agent": USER_AGENT}
     for attempt in range(6):
@@ -502,7 +517,7 @@ def reddit_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any
             continue
         if response.status_code >= 400:
             raise HTTPException(response.status_code, f"Reddit request failed: {response.text[:200]}")
-        time.sleep(1.5)
+        time.sleep(delay_seconds)
         return response.json()
     raise RedditRateLimitError("Reddit rate limit persisted after retries")
 
@@ -578,22 +593,72 @@ def flatten_comments(node: dict[str, Any], thread_id: str, subreddit: str, query
     return rows
 
 
-def collect_reddit_data(req: AnalysisRequest) -> pd.DataFrame:
+def collect_reddit_data(req: AnalysisRequest, progress: Any | None = None) -> pd.DataFrame:
     if req.sample_mode:
-        return sample_dataset(req)
+        rows = sample_dataset(req)
+        if progress:
+            progress({
+                "phase": "complete",
+                "posts_collected": int((rows["type"] == "post").sum()),
+                "comments_collected": int((rows["type"] == "comment").sum()),
+                "max_posts": req.max_results,
+                "comment_fetches": 0,
+                "comments_target": 0,
+                "eta_seconds": 0,
+                "elapsed_seconds": 0,
+                "collection_status": "sample data loaded",
+            })
+        return rows
     subreddit = normalize_subreddit_name(req.subreddit)
     start_ts = int(datetime.combine(req.start_date, datetime.min.time(), timezone.utc).timestamp())
     end_ts = int(datetime.combine(req.end_date, datetime.max.time(), timezone.utc).timestamp())
     rows: list[dict[str, Any]] = []
+    posts: list[dict[str, Any]] = []
     seen: set[str] = set()
     after = None
     query_used = "subreddit_new"
-    while len([r for r in rows if r["type"] == "post"]) < req.max_results:
+    comment_fetches = 0
+    comments_target = 0
+    current_phase = "posts"
+    collection_started = time.time()
+
+    def post_count() -> int:
+        return len([r for r in rows if r["type"] == "post"])
+
+    def comment_count() -> int:
+        return len([r for r in rows if r["type"] == "comment"])
+
+    def report(status: str = "collecting") -> None:
+        if not progress:
+            return
+        elapsed = max(0.1, time.time() - collection_started)
+        posts = post_count()
+        if current_phase == "comments":
+            rate = comment_fetches / elapsed if comment_fetches else 0
+            remaining = max(0, comments_target - comment_fetches)
+        else:
+            rate = posts / elapsed if posts else 0
+            remaining = max(0, req.max_results - posts)
+        eta_seconds = int(remaining / rate) if rate > 0 else None
+        progress({
+            "phase": current_phase,
+            "posts_collected": posts,
+            "comments_collected": comment_count(),
+            "max_posts": req.max_results,
+            "comment_fetches": comment_fetches,
+            "comments_target": comments_target,
+            "eta_seconds": eta_seconds,
+            "elapsed_seconds": int(elapsed),
+            "collection_status": status,
+        })
+
+    report("starting Reddit collection")
+    while post_count() < req.max_results:
         params = {"limit": 100}
         if after:
             params["after"] = after
         try:
-            payload = reddit_get(f"/r/{subreddit}/new.json", params)
+            payload = reddit_get(f"/r/{subreddit}/new.json", params, delay_seconds=POST_LISTING_DELAY_SECONDS)
         except RedditRateLimitError:
             if rows:
                 break
@@ -614,24 +679,40 @@ def collect_reddit_data(req: AnalysisRequest) -> pd.DataFrame:
             if normalized["id"] in seen:
                 continue
             seen.add(normalized["id"])
+            posts.append(normalized)
             rows.append(normalized)
-            if req.include_comments:
-                try:
-                    comments_payload = reddit_get(f"/r/{subreddit}/comments/{normalized['id']}.json")
-                except RedditRateLimitError:
-                    return pd.DataFrame(rows)
-                if isinstance(comments_payload, list) and len(comments_payload) > 1:
-                    for child in comments_payload[1].get("data", {}).get("children", []):
-                        for comment in flatten_comments(child, normalized["id"], subreddit, query_used):
-                            if comment["id"] not in seen:
-                                seen.add(comment["id"])
-                                if start_ts <= comment["created_utc"] <= end_ts:
-                                    rows.append(comment)
-            if len([r for r in rows if r["type"] == "post"]) >= req.max_results:
+            report("collecting posts")
+            if post_count() >= req.max_results:
                 break
         after = listing.get("after")
         if not after:
             break
+    if req.include_comments and posts:
+        current_phase = "comments"
+        comments_target = min(len(posts), MAX_COMMENT_FETCHES_PER_RUN)
+        collection_started = time.time()
+        report("starting comment collection")
+        for normalized in posts:
+            if comment_fetches >= MAX_COMMENT_FETCHES_PER_RUN:
+                report("comment request budget reached; continuing with collected comments")
+                break
+            try:
+                delay = LARGE_RUN_COMMENT_DELAY_SECONDS if req.max_results > 100 else COMMENT_DELAY_SECONDS
+                comments_payload = reddit_get(f"/r/{subreddit}/comments/{normalized['id']}.json", delay_seconds=delay)
+                comment_fetches += 1
+            except RedditRateLimitError:
+                report("rate limited while collecting comments; continuing with partial comments")
+                return pd.DataFrame(rows)
+            if isinstance(comments_payload, list) and len(comments_payload) > 1:
+                for child in comments_payload[1].get("data", {}).get("children", []):
+                    for comment in flatten_comments(child, normalized["id"], subreddit, query_used):
+                        if comment["id"] not in seen:
+                            seen.add(comment["id"])
+                            if start_ts <= comment["created_utc"] <= end_ts:
+                                rows.append(comment)
+            report("collecting comments")
+    current_phase = "complete"
+    report("Reddit collection complete")
     return pd.DataFrame(rows)
 
 
@@ -962,7 +1043,7 @@ def topic_official_practice_notes(keywords: list[str]) -> str:
     return " ".join(notes[:3]) if notes else "Compare with official Mohs post-operative wound care instructions."
 
 
-def fallback_topic_summary(topic: dict[str, Any]) -> dict[str, str]:
+def fallback_topic_summary(topic: dict[str, Any], reason: str = "OpenAI API key not configured") -> dict[str, str]:
     readable_keywords = [keyword.replace("_", " ") for keyword in topic["keywords"]]
     examples = topic.get("example_documents", [])
     example_text = examples[0]["text"] if examples else topic.get("representative_document", "")
@@ -978,9 +1059,13 @@ def fallback_topic_summary(topic: dict[str, Any]) -> dict[str, str]:
         "llm_topic_title": topic["label"],
         "llm_summary": summary,
         "llm_explanation": explanation,
+        "evidence_source_ids": json.dumps([f"T{topic['topic'] + 1}-E1"] if examples else [], ensure_ascii=False),
+        "notable_recommendations": json.dumps(readable_keywords[:4], ensure_ascii=False),
+        "cautions_or_uncertainties": "Local fallback summary; review retrieved examples directly for nuance.",
         "official_practice_area": topic_official_practice_notes(topic["keywords"]),
         "comparison_guidance": "Use this row to compare Reddit advice against official post-op instructions from dermatology or Mohs surgery practices.",
         "llm_summary_source": "local_fallback",
+        "llm_error": reason,
     }
 
 
@@ -996,7 +1081,49 @@ def parse_openai_text(payload: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
-def llm_interpret_topics(topics: list[dict[str, Any]]) -> list[dict[str, str]]:
+def topic_sentiment_distribution(df: pd.DataFrame, topic_id: int) -> dict[str, int]:
+    subset = df[df["topic"] == topic_id]
+    return {str(key): int(value) for key, value in subset["sentiment"].value_counts().to_dict().items()}
+
+
+def topic_treatment_mentions(df: pd.DataFrame, topic_id: int) -> list[dict[str, Any]]:
+    subset = df[df["topic"] == topic_id]
+    rows = []
+    for term in TREATMENT_TERMS:
+        count = int(subset["combined_text"].str.contains(re.escape(term), case=False, na=False).sum())
+        if count:
+            rows.append({"term": term, "count": count})
+    return rows
+
+
+def topic_source_packet(topic: dict[str, Any], sentiment_df: pd.DataFrame | None = None) -> dict[str, Any]:
+    topic_id = topic["topic"]
+    examples = []
+    for index, example in enumerate(topic.get("example_documents", [])[:5], start=1):
+        examples.append({
+            "source_id": f"T{topic_id + 1}-E{index}",
+            "document_id": example.get("id", ""),
+            "type": example.get("type", ""),
+            "date": example.get("date", ""),
+            "score": example.get("score", ""),
+            "permalink": example.get("permalink", ""),
+            "text": example.get("text", ""),
+        })
+    return {
+        "topic": topic_id,
+        "label": topic["label"],
+        "keywords": topic["keywords"],
+        "doc_count": topic["doc_count"],
+        "percentage": topic["percentage"],
+        "distinctiveness": topic.get("distinctiveness"),
+        "sentiment_distribution": topic_sentiment_distribution(sentiment_df, topic_id) if sentiment_df is not None else {},
+        "treatment_mentions": topic_treatment_mentions(sentiment_df, topic_id) if sentiment_df is not None else [],
+        "official_practice_notes": topic_official_practice_notes(topic["keywords"]),
+        "retrieved_sources": examples,
+    }
+
+
+def llm_interpret_topics(topics: list[dict[str, Any]], sentiment_df: pd.DataFrame | None = None) -> list[dict[str, str]]:
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     fallback = [fallback_topic_summary(topic) for topic in topics]
@@ -1004,28 +1131,27 @@ def llm_interpret_topics(topics: list[dict[str, Any]]) -> list[dict[str, str]]:
         return fallback
 
     topic_payload = [
-        {
-            "topic": topic["topic"],
-            "label": topic["label"],
-            "keywords": topic["keywords"],
-            "doc_count": topic["doc_count"],
-            "percentage": topic["percentage"],
-            "examples": [example["text"] for example in topic.get("example_documents", [])[:3]],
-        }
+        topic_source_packet(topic, sentiment_df)
         for topic in topics
     ]
     prompt = {
-        "task": "Interpret LDA topics from Reddit comments about common people's post-Mohs surgery recovery recommendations.",
+        "task": "Use the retrieved Reddit source snippets to interpret topic-model outputs about lay post-Mohs surgery recovery recommendations.",
         "instructions": [
             "Return JSON only, as an array with one object per input topic in the same order.",
-            "Use cautious academic language. Do not claim medical correctness.",
-            "Summaries should explain what advice laypeople are recommending.",
-            "Add comparison guidance for reviewing against official post-operative Mohs recovery instructions.",
+            "Ground every interpretation in the retrieved_sources text and topic keywords. Do not infer advice that is not supported by the snippets.",
+            "Use cautious academic language. Do not claim the Reddit advice is medically correct.",
+            "Summaries should explain what laypeople are recommending, what problem the advice addresses, and any variation or uncertainty visible in the sources.",
+            "Mention source IDs such as T1-E1 when describing evidence.",
+            "Add comparison guidance for reviewing the lay advice against official post-operative Mohs recovery instructions.",
+            "If sources are thin or mixed, say so explicitly.",
         ],
         "required_fields": [
             "llm_topic_title",
             "llm_summary",
             "llm_explanation",
+            "evidence_source_ids",
+            "notable_recommendations",
+            "cautions_or_uncertainties",
             "official_practice_area",
             "comparison_guidance",
         ],
@@ -1053,24 +1179,31 @@ def llm_interpret_topics(topics: list[dict[str, Any]]) -> list[dict[str, str]]:
         text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
         interpreted = json.loads(text)
         if not isinstance(interpreted, list) or len(interpreted) != len(topics):
-            return fallback
+            return [fallback_topic_summary(topic, "OpenAI response did not contain one interpretation per topic") for topic in topics]
         merged = []
         for item in interpreted:
             merged.append({
                 "llm_topic_title": str(item.get("llm_topic_title", "")),
                 "llm_summary": str(item.get("llm_summary", "")),
                 "llm_explanation": str(item.get("llm_explanation", "")),
+                "evidence_source_ids": json.dumps(item.get("evidence_source_ids", []), ensure_ascii=False),
+                "notable_recommendations": json.dumps(item.get("notable_recommendations", []), ensure_ascii=False),
+                "cautions_or_uncertainties": str(item.get("cautions_or_uncertainties", "")),
                 "official_practice_area": str(item.get("official_practice_area", "")),
                 "comparison_guidance": str(item.get("comparison_guidance", "")),
                 "llm_summary_source": f"openai:{model}",
+                "llm_error": "",
             })
         return merged
-    except Exception:
-        return fallback
+    except requests.HTTPError as exc:
+        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        return [fallback_topic_summary(topic, f"OpenAI request failed: {detail}") for topic in topics]
+    except Exception as exc:
+        return [fallback_topic_summary(topic, f"OpenAI interpretation failed: {exc}") for topic in topics]
 
 
-def attach_topic_interpretations(topics: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    interpretations = llm_interpret_topics(topics)
+def attach_topic_interpretations(topics: list[dict[str, Any]], sentiment_df: pd.DataFrame | None = None) -> list[dict[str, Any]]:
+    interpretations = llm_interpret_topics(topics, sentiment_df)
     enriched = []
     for topic, interpretation in zip(topics, interpretations):
         enriched.append({**topic, **interpretation})
@@ -1190,12 +1323,16 @@ def topic_rows_for_excel(topics: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "distinctiveness": topic.get("distinctiveness", ""),
             "llm_summary": topic.get("llm_summary", ""),
             "llm_explanation": topic.get("llm_explanation", ""),
+            "evidence_source_ids": topic.get("evidence_source_ids", ""),
+            "notable_recommendations": topic.get("notable_recommendations", ""),
+            "cautions_or_uncertainties": topic.get("cautions_or_uncertainties", ""),
             "official_practice_area": topic.get("official_practice_area", topic_official_practice_notes(topic["keywords"])),
             "comparison_guidance": topic.get("comparison_guidance", ""),
             "official_recommendation_notes": "",
             "alignment_assessment": "",
             "reviewer_notes": "",
             "llm_summary_source": topic.get("llm_summary_source", ""),
+            "llm_error": topic.get("llm_error", ""),
         })
     return rows
 
@@ -1283,10 +1420,18 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
     if req.end_date < req.start_date:
         raise HTTPException(422, "end_date must be on or after start_date")
     step(0)
-    raw = collect_reddit_data(req)
+    def collection_progress(details: dict[str, Any]) -> None:
+        if progress:
+            phase = details.get("phase")
+            if phase == "comments":
+                progress(1, ANALYSIS_STEPS[1], details)
+            else:
+                progress(0, ANALYSIS_STEPS[0], details)
+
+    raw = collect_reddit_data(req, collection_progress)
     if raw.empty:
         raise HTTPException(404, "No Reddit documents found for the requested subreddit and date range.")
-    step(1)
+    step(2)
     clean_all = preprocess_dataframe(raw, normalize_stopword_terms(req.keywords or DEFAULT_LDA_STOPWORDS))
     if clean_all.empty:
         raise HTTPException(422, "Documents were found, but none had enough analyzable text after preprocessing.")
@@ -1296,12 +1441,11 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
     clean = apply_recommendation_vocabulary(clean)
     if clean.empty:
         raise HTTPException(422, "Management/recovery advice documents were found, but not enough concrete aftercare recommendations were detected for topic modeling.")
-    step(2)
+    step(3)
     model, _, corpus, lda_input = train_lda(clean, req.k)
     assigned = assign_topics(lda_input, model, corpus)
     topics = build_topics(assigned, model)
-    topics = attach_topic_interpretations(topics)
-    step(3)
+    step(4)
     sentiment_df = run_sentiment(assigned)
     sentiment_summary = {
         "overall_distribution": sentiment_df["sentiment"].value_counts(normalize=True).mul(100).round(2).to_dict(),
@@ -1314,13 +1458,14 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
     )
     treatment = treatment_sentiment(sentiment_df)
     domains = shared_domains(sentiment_df)
-    step(4)
+    topics = attach_topic_interpretations(topics, sentiment_df)
+    step(5)
     figures = make_figures(sentiment_df, topics, treatment, domains)
     stats = compute_corpus_stats(raw, clean_all)
     stats["analysis_focus"] = "Management/recovery advice"
     stats["lda_docs"] = int(len(clean))
     stats["lda_doc_percentage"] = round(len(clean) / max(1, len(clean_all)) * 100, 2)
-    step(5)
+    step(6)
     links = export_results(raw, clean_all, topics, sentiment_df, category_percentages, treatment, domains, figures, stats)
     return {
         "corpus_stats": stats,
@@ -1336,8 +1481,11 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
 
 
 def run_job(job_id: str, req: AnalysisRequest) -> None:
-    def progress(step_index: int, step_name: str) -> None:
-        update_job(job_id, status="running", step_index=step_index, step=step_name)
+    def progress(step_index: int, step_name: str, details: dict[str, Any] | None = None) -> None:
+        updates = {"status": "running", "step_index": step_index, "step": step_name}
+        if details is not None:
+            updates["collection_progress"] = details
+        update_job(job_id, **updates)
 
     try:
         result = run_analysis_pipeline(req, progress)
@@ -1358,6 +1506,17 @@ def create_analysis_job(req: AnalysisRequest) -> AnalysisJobCreated:
             "step_index": -1,
             "step": "Queued",
             "steps": ANALYSIS_STEPS,
+            "collection_progress": {
+                "phase": "queued",
+                "posts_collected": 0,
+                "comments_collected": 0,
+                "max_posts": req.max_results,
+                "comment_fetches": 0,
+                "comments_target": 0,
+                "eta_seconds": None,
+                "elapsed_seconds": 0,
+                "collection_status": "queued",
+            },
             "result": None,
             "error": None,
         }
