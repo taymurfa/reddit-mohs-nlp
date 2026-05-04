@@ -296,9 +296,9 @@ export default function Home() {
               Download workbook
             </a>
           )}
-          {result.export_links.length > 0 && (
+          {result!.export_links.length > 0 && (
             <div className="flex items-center gap-2">
-              {result.export_links.slice(0, 3).map((link) => (
+              {result!.export_links.slice(0, 3).map((link) => (
                 <a key={link.url} href={`${API_BASE}${link.url}`} className="text-xs text-slate-600 hover:text-slate-300">
                   <Download size={12} />
                 </a>
@@ -316,7 +316,7 @@ export default function Home() {
 
       {/* Corpus stats strip */}
       <div className="flex shrink-0 items-center gap-8 border-b border-white/[0.04] bg-slate-900/30 px-6 py-2.5">
-        {Object.entries(result.corpus_stats).map(([key, value]) => (
+        {Object.entries(result!.corpus_stats).map(([key, value]) => (
           <div key={key} className="flex items-baseline gap-1.5">
             <span className="text-sm font-semibold text-white">{String(value)}</span>
             <span className="text-[11px] text-slate-600">{key.replaceAll("_", " ")}</span>
