@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from plotly.utils import PlotlyJSONEncoder
 from gensim import corpora
-from gensim.models import LdaModel
+from gensim.models import LdaModel, CoherenceModel
 from gensim.models.phrases import Phrases, Phraser
 from nltk.corpus import stopwords, wordnet
 from nltk.stem import WordNetLemmatizer
@@ -492,10 +492,9 @@ class AnalysisRequest(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     start_date: date
     end_date: date
-    k: int = Field(default=10, ge=2, le=50)
+    k: int = Field(default=5, ge=2, le=50)
+    auto_k: bool = False
     max_results: int = Field(default=1000, ge=10, le=5000)
-    include_comments: bool = True
-    sample_mode: bool = False
 
 
 class AnalysisJobCreated(BaseModel):
@@ -594,21 +593,6 @@ def flatten_comments(node: dict[str, Any], thread_id: str, subreddit: str, query
 
 
 def collect_reddit_data(req: AnalysisRequest, progress: Any | None = None) -> pd.DataFrame:
-    if req.sample_mode:
-        rows = sample_dataset(req)
-        if progress:
-            progress({
-                "phase": "complete",
-                "posts_collected": int((rows["type"] == "post").sum()),
-                "comments_collected": int((rows["type"] == "comment").sum()),
-                "max_posts": req.max_results,
-                "comment_fetches": 0,
-                "comments_target": 0,
-                "eta_seconds": 0,
-                "elapsed_seconds": 0,
-                "collection_status": "sample data loaded",
-            })
-        return rows
     subreddit = normalize_subreddit_name(req.subreddit)
     start_ts = int(datetime.combine(req.start_date, datetime.min.time(), timezone.utc).timestamp())
     end_ts = int(datetime.combine(req.end_date, datetime.max.time(), timezone.utc).timestamp())
@@ -687,7 +671,7 @@ def collect_reddit_data(req: AnalysisRequest, progress: Any | None = None) -> pd
         after = listing.get("after")
         if not after:
             break
-    if req.include_comments and posts:
+    if posts:
         current_phase = "comments"
         comments_target = min(len(posts), MAX_COMMENT_FETCHES_PER_RUN)
         collection_started = time.time()
@@ -909,6 +893,31 @@ def focus_management_recovery(df: pd.DataFrame) -> pd.DataFrame:
     return focused.reset_index(drop=True)
 
 
+def find_optimal_k(df: pd.DataFrame, k_min: int = 2, k_max: int = 10) -> int:
+    dictionary = corpora.Dictionary(df["tokens"])
+    no_below = 2 if len(df) >= 100 else 1
+    dictionary.filter_extremes(no_below=no_below, no_above=0.85, keep_n=3000)
+    corpus_all = [dictionary.doc2bow(tokens) for tokens in df["tokens"]]
+    keep_indexes = [i for i, bow in enumerate(corpus_all) if bow]
+    texts = [df["tokens"].iloc[i] for i in keep_indexes]
+    corpus = [corpus_all[i] for i in keep_indexes]
+    max_k = min(k_max, len(corpus) - 1, max(2, round(len(corpus) ** 0.5) + 1))
+    k_range = range(max(k_min, 2), max_k + 1)
+    if len(k_range) < 2:
+        return k_min
+    best_k, best_score = k_min, -float("inf")
+    for k in k_range:
+        model = LdaModel(corpus=corpus, id2word=dictionary, num_topics=k,
+                         passes=15, iterations=100, alpha=0.1, eta=0.01,
+                         random_state=42, minimum_probability=0)
+        score = CoherenceModel(model=model, texts=texts, dictionary=dictionary, coherence="c_v").get_coherence()
+        print(f"[auto_k] k={k} coherence={score:.4f}", flush=True)
+        if score > best_score:
+            best_score, best_k = score, k
+    print(f"[auto_k] selected k={best_k} (coherence={best_score:.4f})", flush=True)
+    return best_k
+
+
 def train_lda(df: pd.DataFrame, k: int) -> tuple[LdaModel, corpora.Dictionary, list[list[tuple[int, int]]], pd.DataFrame]:
     dictionary = corpora.Dictionary(df["tokens"])
     no_below = 2 if len(df) >= 100 else 1
@@ -985,7 +994,7 @@ def topic_distinctiveness(topic_keywords: list[str], all_topic_keywords: list[li
 def display_example_text(row: pd.Series) -> str:
     text = row.get("analysis_text") or row.get("combined_text") or ""
     text = re.sub(r"https?://\S+", "", str(text)).strip()
-    return text[:420]
+    return text[:1200]
 
 
 def build_topics(df: pd.DataFrame, model: LdaModel) -> list[dict[str, Any]]:
@@ -1001,11 +1010,11 @@ def build_topics(df: pd.DataFrame, model: LdaModel) -> list[dict[str, Any]]:
         if ranked_source.empty:
             ranked_source = df.copy()
             ranked_source["_topic_probability"] = ranked_source["topic_probabilities"].apply(lambda probs: probs.get(topic_id, 0))
-            ranked = ranked_source.sort_values("_topic_probability", ascending=False).head(3)
+            ranked = ranked_source.sort_values("_topic_probability", ascending=False).head(5)
         else:
-            ranked = ranked_source.sort_values("topic_score", ascending=False).head(3)
+            ranked = ranked_source.sort_values("topic_score", ascending=False).head(5)
         if not ranked.empty:
-            rep = ranked.iloc[0]["combined_text"][:320]
+            rep = ranked.iloc[0]["combined_text"][:1200]
             examples = [
                 {
                     "id": row["id"],
@@ -1137,7 +1146,7 @@ def llm_interpret_topics(topics: list[dict[str, Any]], sentiment_df: pd.DataFram
     prompt = {
         "task": "Use the retrieved Reddit source snippets to interpret topic-model outputs about lay post-Mohs surgery recovery recommendations.",
         "instructions": [
-            "Return JSON only, as an array with one object per input topic in the same order.",
+            "Return JSON only, as an array with one object per input topic in the same order. Each object MUST include a 'topic_index' field matching the index of the topic in the input array (0-based). Never skip a topic.",
             "Ground every interpretation in the retrieved_sources text and topic keywords. Do not infer advice that is not supported by the snippets.",
             "Use cautious academic language. Do not claim the Reddit advice is medically correct.",
             "Summaries should explain what laypeople are recommending, what problem the advice addresses, and any variation or uncertainty visible in the sources.",
@@ -1178,27 +1187,45 @@ def llm_interpret_topics(topics: list[dict[str, Any]], sentiment_df: pd.DataFram
         text = parse_openai_text(response.json()).strip()
         text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
         interpreted = json.loads(text)
-        if not isinstance(interpreted, list) or len(interpreted) != len(topics):
-            return [fallback_topic_summary(topic, "OpenAI response did not contain one interpretation per topic") for topic in topics]
-        merged = []
+        if not isinstance(interpreted, list) or len(interpreted) == 0:
+            print(f"[LLM] Bad response shape: got {type(interpreted)}", flush=True)
+            return [fallback_topic_summary(topic, "OpenAI response was not a list") for topic in topics]
+        # Build a lookup by topic index if the model included it, otherwise fall back to positional
+        by_index: dict[int, dict] = {}
         for item in interpreted:
-            merged.append({
-                "llm_topic_title": str(item.get("llm_topic_title", "")),
-                "llm_summary": str(item.get("llm_summary", "")),
-                "llm_explanation": str(item.get("llm_explanation", "")),
-                "evidence_source_ids": json.dumps(item.get("evidence_source_ids", []), ensure_ascii=False),
-                "notable_recommendations": json.dumps(item.get("notable_recommendations", []), ensure_ascii=False),
-                "cautions_or_uncertainties": str(item.get("cautions_or_uncertainties", "")),
-                "official_practice_area": str(item.get("official_practice_area", "")),
-                "comparison_guidance": str(item.get("comparison_guidance", "")),
-                "llm_summary_source": f"openai:{model}",
-                "llm_error": "",
-            })
+            ti = item.get("topic_index")
+            if isinstance(ti, int) and 0 <= ti < len(topics):
+                by_index[ti] = item
+        if len(by_index) < len(interpreted):
+            # No topic_index fields — use positional
+            by_index = {i: item for i, item in enumerate(interpreted)}
+        merged = []
+        for i, topic in enumerate(topics):
+            item = by_index.get(i, {})
+            if not item:
+                merged.append(fallback_topic_summary(topic, "OpenAI did not return an interpretation for this topic"))
+            else:
+                merged.append({
+                    "llm_topic_title": str(item.get("llm_topic_title", "")),
+                    "llm_summary": str(item.get("llm_summary", "")),
+                    "llm_explanation": str(item.get("llm_explanation", "")),
+                    "evidence_source_ids": json.dumps(item.get("evidence_source_ids", []), ensure_ascii=False),
+                    "notable_recommendations": json.dumps(item.get("notable_recommendations", []), ensure_ascii=False),
+                    "cautions_or_uncertainties": str(item.get("cautions_or_uncertainties", "")),
+                    "official_practice_area": str(item.get("official_practice_area", "")),
+                    "comparison_guidance": str(item.get("comparison_guidance", "")),
+                    "llm_summary_source": f"openai:{model}",
+                    "llm_error": "",
+                })
+        print(f"[LLM] Success: {sum(1 for m in merged if m.get('llm_summary_source', '').startswith('openai'))}/{len(topics)} topics interpreted", flush=True)
         return merged
     except requests.HTTPError as exc:
         detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        print(f"[LLM] HTTP error: {detail}", flush=True)
         return [fallback_topic_summary(topic, f"OpenAI request failed: {detail}") for topic in topics]
     except Exception as exc:
+        import traceback
+        print(f"[LLM] Exception: {exc}\n{traceback.format_exc()}", flush=True)
         return [fallback_topic_summary(topic, f"OpenAI interpretation failed: {exc}") for topic in topics]
 
 
@@ -1442,7 +1469,8 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
     if clean.empty:
         raise HTTPException(422, "Management/recovery advice documents were found, but not enough concrete aftercare recommendations were detected for topic modeling.")
     step(3)
-    model, _, corpus, lda_input = train_lda(clean, req.k)
+    chosen_k = find_optimal_k(clean, k_max=min(req.k, 10)) if req.auto_k else req.k
+    model, _, corpus, lda_input = train_lda(clean, chosen_k)
     assigned = assign_topics(lda_input, model, corpus)
     topics = build_topics(assigned, model)
     step(4)
