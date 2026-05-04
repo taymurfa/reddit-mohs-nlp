@@ -276,7 +276,7 @@ export default function Home() {
   }
 
   // ── Results state: full-viewport graph ───────────────────────────────────
-  const totalDocs = Object.values(result.corpus_stats).find((v) => typeof v === "number" && (v as number) > 10) as number ?? topics.reduce((s, t) => s + t.doc_count, 0);
+  const totalDocs = Object.values(result!.corpus_stats).find((v) => typeof v === "number" && (v as number) > 10) as number ?? topics.reduce((s, t) => s + t.doc_count, 0);
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-ink text-slate-100">
