@@ -6,8 +6,14 @@ Full-stack Reddit NLP analysis app for Mohs surgery discussions. The workflow co
 
 ```bash
 cd backend
-python -m venv .venv
+python3 -m venv .venv
+
+# On macOS/Linux:
+source .venv/bin/activate
+
+# On Windows:
 .venv\Scripts\activate
+
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```

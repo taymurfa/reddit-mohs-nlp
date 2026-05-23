@@ -38,9 +38,9 @@ EXPORT_ROOT.mkdir(exist_ok=True)
 
 REDDIT_BASE = "https://www.reddit.com"
 USER_AGENT = "mohs-reddit-lda/1.0 academic analysis app"
-POST_LISTING_DELAY_SECONDS = 2.5
-COMMENT_DELAY_SECONDS = 2.0
-LARGE_RUN_COMMENT_DELAY_SECONDS = 3.5
+POST_LISTING_DELAY_SECONDS = 1.0
+COMMENT_DELAY_SECONDS = 1.0
+LARGE_RUN_COMMENT_DELAY_SECONDS = 1.2
 MAX_COMMENT_FETCHES_PER_RUN = 250
 MOHS_STOPWORDS = {
     "mohs",
@@ -607,10 +607,10 @@ def collect_reddit_data(req: AnalysisRequest, progress: Any | None = None) -> pd
     collection_started = time.time()
 
     def post_count() -> int:
-        return len([r for r in rows if r["type"] == "post"])
+        return len(posts)
 
     def comment_count() -> int:
-        return len([r for r in rows if r["type"] == "comment"])
+        return len(rows) - len(posts)
 
     def report(status: str = "collecting") -> None:
         if not progress:
@@ -665,9 +665,9 @@ def collect_reddit_data(req: AnalysisRequest, progress: Any | None = None) -> pd
             seen.add(normalized["id"])
             posts.append(normalized)
             rows.append(normalized)
-            report("collecting posts")
             if post_count() >= req.max_results:
                 break
+        report("collecting posts")
         after = listing.get("after")
         if not after:
             break
