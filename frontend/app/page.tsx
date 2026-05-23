@@ -41,12 +41,7 @@ type Topic = {
   label: string;
   category: string;
   llm_topic_title?: string;
-  llm_summary?: string;
-  llm_explanation?: string;
-  notable_recommendations?: string;
-  cautions_or_uncertainties?: string;
-  official_practice_area?: string;
-  comparison_guidance?: string;
+  peer_advice_statements?: string;
   llm_error?: string;
 };
 

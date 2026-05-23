@@ -10,12 +10,7 @@ type Topic = {
   percentage: number;
   label: string;
   llm_topic_title?: string;
-  llm_summary?: string;
-  llm_explanation?: string;
-  notable_recommendations?: string;
-  cautions_or_uncertainties?: string;
-  official_practice_area?: string;
-  representative_document?: string;
+  peer_advice_statements?: string;
   example_documents?: Array<{ id: string; type: string; date: string; score: number; permalink: string; text: string }>;
 };
 
@@ -399,8 +394,14 @@ export default function TopicGraph({ topics, totalDocs }: { topics: Topic[]; tot
     return () => { sim.stop(); };
   }, [topics, totalDocs, dims, selected]);
 
-  const recommendations = selected?.notable_recommendations ? formatJsonList(selected.notable_recommendations) : "";
-  const cautions = selected?.cautions_or_uncertainties ? formatJsonList(selected.cautions_or_uncertainties) : "";
+  let peerAdvice: string[] = [];
+  try {
+    if (selected?.peer_advice_statements) {
+      peerAdvice = JSON.parse(selected.peer_advice_statements);
+    }
+  } catch {
+    // fallback if parsing fails
+  }
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden">
@@ -430,28 +431,19 @@ export default function TopicGraph({ topics, totalDocs }: { topics: Topic[]; tot
               ))}
             </div>
 
-            {selected.llm_explanation && (
-              <p className="mt-4 text-sm leading-6 text-slate-400">
-                {linkifyCitations(selected.llm_explanation, selected.example_documents ?? [], selected.topic + 1)}
-              </p>
-            )}
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {recommendations && (
-                <div>
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-600">Recommendations</div>
-                  <div className="mt-1 text-sm text-slate-300">{recommendations}</div>
-                </div>
-              )}
-              {cautions && (
-                <div>
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-600">Cautions</div>
-                  <div className="mt-1 text-sm text-slate-300">{cautions}</div>
-                </div>
-              )}
-            </div>
-            {selected.official_practice_area && (
-              <div className="mt-4 rounded-lg bg-amber/10 px-3 py-2.5 text-xs leading-5 text-amber">
-                {selected.official_practice_area}
+            {peerAdvice.length > 0 && (
+              <div className="mt-5">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500 mb-3">Peer Advice Statements</div>
+                <ul className="space-y-3">
+                  {peerAdvice.map((statement, idx) => (
+                    <li key={idx} className="flex gap-3 text-sm text-slate-300 leading-relaxed">
+                      <span className="text-slate-500 font-medium shrink-0 mt-0.5">{idx + 1}.</span>
+                      <div>
+                        {linkifyCitations(statement, selected.example_documents ?? [], selected.topic + 1)}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
 

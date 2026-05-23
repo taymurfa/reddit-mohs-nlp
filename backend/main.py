@@ -1144,25 +1144,18 @@ def llm_interpret_topics(topics: list[dict[str, Any]], sentiment_df: pd.DataFram
         for topic in topics
     ]
     prompt = {
-        "task": "Use the retrieved Reddit source snippets to interpret topic-model outputs about lay post-Mohs surgery recovery recommendations.",
+        "task": "Use the retrieved Reddit source snippets to extract actionable lay peer advice statements about post-Mohs surgery recovery.",
         "instructions": [
             "Return JSON only, as an array with one object per input topic in the same order. Each object MUST include a 'topic_index' field matching the index of the topic in the input array (0-based). Never skip a topic.",
-            "Ground every interpretation in the retrieved_sources text and topic keywords. Do not infer advice that is not supported by the snippets.",
-            "Use cautious academic language. Do not claim the Reddit advice is medically correct.",
-            "Summaries should explain what laypeople are recommending, what problem the advice addresses, and any variation or uncertainty visible in the sources.",
-            "Mention source IDs such as T1-E1 when describing evidence.",
-            "Add comparison guidance for reviewing the lay advice against official post-operative Mohs recovery instructions.",
-            "If sources are thin or mixed, say so explicitly.",
+            "Provide a highly concise category title for the topic (e.g., 'Wound Care', 'Activity Restrictions', 'Medications') in 'llm_topic_title'.",
+            "In 'peer_advice_statements', provide an array of 2-5 actionable peer advice statements that represent what patients are recommending to each other in the sources.",
+            "Formulate the statements clearly and directly (e.g., 'Keep the wound covered with a bandage and petroleum jelly until it is fully healed.').",
+            "At the end of each statement, append the source IDs in parentheses, e.g., '...until fully healed. (T1-E1, T1-E2)'.",
+            "Ground every statement strictly in the retrieved_sources text and topic keywords."
         ],
         "required_fields": [
             "llm_topic_title",
-            "llm_summary",
-            "llm_explanation",
-            "evidence_source_ids",
-            "notable_recommendations",
-            "cautions_or_uncertainties",
-            "official_practice_area",
-            "comparison_guidance",
+            "peer_advice_statements"
         ],
         "topics": topic_payload,
     }
@@ -1207,13 +1200,7 @@ def llm_interpret_topics(topics: list[dict[str, Any]], sentiment_df: pd.DataFram
             else:
                 merged.append({
                     "llm_topic_title": str(item.get("llm_topic_title", "")),
-                    "llm_summary": str(item.get("llm_summary", "")),
-                    "llm_explanation": str(item.get("llm_explanation", "")),
-                    "evidence_source_ids": json.dumps(item.get("evidence_source_ids", []), ensure_ascii=False),
-                    "notable_recommendations": json.dumps(item.get("notable_recommendations", []), ensure_ascii=False),
-                    "cautions_or_uncertainties": str(item.get("cautions_or_uncertainties", "")),
-                    "official_practice_area": str(item.get("official_practice_area", "")),
-                    "comparison_guidance": str(item.get("comparison_guidance", "")),
+                    "peer_advice_statements": json.dumps(item.get("peer_advice_statements", []), ensure_ascii=False),
                     "llm_summary_source": f"openai:{model}",
                     "llm_error": "",
                 })
@@ -1469,7 +1456,7 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
     if clean.empty:
         raise HTTPException(422, "Management/recovery advice documents were found, but not enough concrete aftercare recommendations were detected for topic modeling.")
     step(3)
-    chosen_k = find_optimal_k(clean, k_max=min(req.k, 10)) if req.auto_k else req.k
+    chosen_k = find_optimal_k(clean) if req.auto_k else req.k
     model, _, corpus, lda_input = train_lda(clean, chosen_k)
     assigned = assign_topics(lda_input, model, corpus)
     topics = build_topics(assigned, model)
