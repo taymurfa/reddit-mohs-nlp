@@ -41,7 +41,6 @@ USER_AGENT = "mohs-reddit-lda/1.0 academic analysis app"
 POST_LISTING_DELAY_SECONDS = 1.0
 COMMENT_DELAY_SECONDS = 1.0
 LARGE_RUN_COMMENT_DELAY_SECONDS = 1.2
-MAX_COMMENT_FETCHES_PER_RUN = 250
 MOHS_STOPWORDS = {
     "mohs",
     "surgery",
@@ -456,7 +455,11 @@ def cors_origins() -> list[str]:
         for origin in os.getenv("CORS_ORIGINS", "").split(",")
         if origin.strip()
     ]
-    return ["http://localhost:3000", "http://127.0.0.1:3000", *configured]
+    local_origins = []
+    for port in range(3000, 3010):
+        local_origins.append(f"http://localhost:{port}")
+        local_origins.append(f"http://127.0.0.1:{port}")
+    return [*local_origins, *configured]
 
 
 app = FastAPI(title="Mohs Reddit LDA API", version="1.0.0")
@@ -494,7 +497,7 @@ class AnalysisRequest(BaseModel):
     end_date: date
     k: int = Field(default=5, ge=2, le=50)
     auto_k: bool = False
-    max_results: int = Field(default=1000, ge=10, le=5000)
+    max_results: int = Field(default=1000, ge=10, le=1000000)
 
 
 class AnalysisJobCreated(BaseModel):
@@ -673,13 +676,10 @@ def collect_reddit_data(req: AnalysisRequest, progress: Any | None = None) -> pd
             break
     if posts:
         current_phase = "comments"
-        comments_target = min(len(posts), MAX_COMMENT_FETCHES_PER_RUN)
+        comments_target = len(posts)
         collection_started = time.time()
         report("starting comment collection")
         for normalized in posts:
-            if comment_fetches >= MAX_COMMENT_FETCHES_PER_RUN:
-                report("comment request budget reached; continuing with collected comments")
-                break
             try:
                 delay = LARGE_RUN_COMMENT_DELAY_SECONDS if req.max_results > 100 else COMMENT_DELAY_SECONDS
                 comments_payload = reddit_get(f"/r/{subreddit}/comments/{normalized['id']}.json", delay_seconds=delay)
@@ -1482,6 +1482,26 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
     stats["lda_doc_percentage"] = round(len(clean) / max(1, len(clean_all)) * 100, 2)
     step(6)
     links = export_results(raw, clean_all, topics, sentiment_df, category_percentages, treatment, domains, figures, stats)
+    
+    merged_docs = clean_all.copy()
+    if "topic" in assigned.columns:
+        merged_docs = merged_docs.merge(assigned[["id", "topic"]], on="id", how="left")
+    else:
+        merged_docs["topic"] = None
+        
+    docs_payload = []
+    for _, r in merged_docs.iterrows():
+        docs_payload.append({
+            "id": str(r.get("id", "")),
+            "type": str(r.get("type", "")),
+            "date": str(r.get("date", "")),
+            "author": str(r.get("author", "")),
+            "score": int(r.get("score", 0)) if pd.notnull(r.get("score")) else 0,
+            "permalink": str(r.get("permalink", "")),
+            "text": str(r.get("combined_text", "")),
+            "topic": int(r["topic"]) if pd.notnull(r.get("topic")) else None,
+            "thread_id": str(r.get("thread_id", "")) if pd.notnull(r.get("thread_id")) else None,
+        })
     return {
         "corpus_stats": stats,
         "topics": topics,
@@ -1492,6 +1512,7 @@ def run_analysis_pipeline(req: AnalysisRequest, progress: Any | None = None) -> 
         "shared_domains": domains,
         "figures": figures,
         "export_links": links,
+        "documents": docs_payload,
     }
 
 

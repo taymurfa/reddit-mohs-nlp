@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 
 const TopicGraph = dynamic(() => import("./TopicGraph"), { ssr: false });
+const DocumentsView = dynamic(() => import("./DocumentsView"), { ssr: false });
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -45,9 +46,22 @@ type Topic = {
   llm_error?: string;
 };
 
+type RawDocument = {
+  id: string;
+  type: string;
+  date: string;
+  author: string;
+  score: number;
+  permalink: string;
+  text: string;
+  topic: number | null;
+  thread_id: string | null;
+};
+
 type AnalysisResult = {
   corpus_stats: Record<string, string | number>;
   topics: Topic[];
+  documents: RawDocument[];
   export_links: Array<{ name: string; url: string }>;
 };
 
@@ -75,10 +89,11 @@ export default function Home() {
     end_date: new Date().toISOString().slice(0, 10),
     k: 5,
     auto_k: true,
-    max_results: 100,
+    mode: "test" as "test" | "research",
   });
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [showDocuments, setShowDocuments] = useState(false);
   const [running, setRunning] = useState(false);
   const [progressIndex, setProgressIndex] = useState(-1);
   const [progressStatus, setProgressStatus] = useState<AnalysisJob["status"] | "idle">("idle");
@@ -105,7 +120,7 @@ export default function Home() {
     ...form,
     keywords: form.keywords.split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean),
     k: Number(form.k),
-    max_results: Number(form.max_results),
+    max_results: form.mode === "test" ? 100 : 100000,
   }), [form]);
 
   async function runAnalysis() {
@@ -208,10 +223,25 @@ export default function Home() {
                   </div>
                   {form.auto_k && <p className="mt-1 text-[11px] text-slate-600">Optimal k selected via coherence scoring</p>}
                 </Field>
-                <Field label="Max posts">
-                  <input type="number" min={10} max={5000} step={10} className="field" value={form.max_results} onChange={(e) => setForm({ ...form, max_results: Number(e.target.value) })} />
+                <Field label="Analysis Mode">
+                  <div className="flex items-center gap-3 mt-1.5 mb-1">
+                    <span className={`text-[13px] font-medium transition ${form.mode === "test" ? "text-slate-200" : "text-slate-500"}`}>Test (100 posts)</span>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, mode: form.mode === "test" ? "research" : "test" })}
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none ${form.mode === "research" ? "bg-accent" : "bg-slate-700"}`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform ${form.mode === "research" ? "translate-x-[18px]" : "translate-x-[2px]"}`} />
+                    </button>
+                    <span className={`text-[13px] font-medium transition ${form.mode === "research" ? "text-slate-200" : "text-slate-500"}`}>Research (All posts)</span>
+                  </div>
                 </Field>
               </div>
+              {form.mode === "research" && (
+                <div className="mt-4 rounded-lg bg-amber-500/10 px-3 py-2.5 text-[13px] text-amber-300">
+                  ⚠️ <strong>Research mode</strong> fetches every post and comment in the date range. Due to Reddit's strict API rate limits, this can take hours to complete for large datasets.
+                </div>
+              )}
             </div>
 
             {API_BASE_IS_LOCAL && (
@@ -240,7 +270,7 @@ export default function Home() {
       <main className="flex min-h-screen flex-col items-center bg-ink text-slate-100">
         <div className="mx-auto flex w-full max-w-md flex-col px-6 pt-24">
           <h1 className="mb-1 text-xl font-semibold text-white">Running analysis…</h1>
-          <p className="mb-10 text-sm text-slate-500">{form.subreddit} · {form.k} topics · {form.max_results} posts</p>
+          <p className="mb-10 text-sm text-slate-500">{form.subreddit} · {form.k} topics · {form.mode === "test" ? "100 posts (Test Mode)" : "All posts (Research Mode)"}</p>
 
           <div className="rounded-xl border border-white/[0.06] bg-slate-900/70 p-6">
             <div className="grid gap-3">
@@ -310,18 +340,28 @@ export default function Home() {
       </header>
 
       {/* Corpus stats strip */}
-      <div className="flex shrink-0 items-center gap-8 border-b border-white/[0.04] bg-slate-900/30 px-6 py-2.5">
+      <button 
+        onClick={() => setShowDocuments(true)}
+        className="flex shrink-0 items-center gap-8 border-b border-white/[0.04] bg-slate-900/30 px-6 py-2.5 transition hover:bg-slate-900/60 cursor-pointer text-left w-full"
+      >
         {Object.entries(result!.corpus_stats).map(([key, value]) => (
           <div key={key} className="flex items-baseline gap-1.5">
             <span className="text-sm font-semibold text-white">{String(value)}</span>
-            <span className="text-[11px] text-slate-600">{key.replaceAll("_", " ")}</span>
+            <span className="text-[11px] text-slate-600 group-hover:text-slate-400">{key.replaceAll("_", " ")}</span>
           </div>
         ))}
-      </div>
+        <div className="ml-auto flex items-center gap-2 text-[11px] text-slate-500 font-medium">
+          View all source docs <span>→</span>
+        </div>
+      </button>
 
-      {/* Graph — fills remaining space */}
+      {/* Graph or Documents View — fills remaining space */}
       <div className="relative min-h-0 flex-1">
-        <TopicGraph topics={topics} totalDocs={totalDocs} />
+        {showDocuments ? (
+          <DocumentsView documents={result!.documents} topics={topics} onClose={() => setShowDocuments(false)} />
+        ) : (
+          <TopicGraph topics={topics} totalDocs={totalDocs} />
+        )}
       </div>
     </main>
   );
